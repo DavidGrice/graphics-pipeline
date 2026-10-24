@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, test, main]
+  push:
+    branches: [dev, test, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build asset schema
+        run: npm run build:schema --if-present
+      - name: Typecheck
+        run: npm run typecheck --if-present
+      - name: Sprint 1 acceptance tests
+        run: npm run test:s1
+      - name: Forbid tracked media under data/
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files 'data/**' | grep -E '\.(png|glb|gltf|fbx|obj|mtl|kra|blend|blend1|blend2)$' || true)
+          if [[ -n "${bad}" ]]; then
+            echo "::error::Tracked forbidden media under data/:"
+            echo "${bad}"
+            exit 1
+          fi
+          echo "OK: no tracked data/** media binaries"
