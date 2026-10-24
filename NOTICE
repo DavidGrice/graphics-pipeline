@@ -1,0 +1,21 @@
+Graphics Pipeline — third-party and dual-component notices
+
+1. Our application code (adapters, Blender scripts, world-builder, asset-schema)
+   is under the MIT License (see LICENSE).
+
+2. Krita is GPL-3.0. Any distributed Krita plugin that uses LibKis / pykrita
+   must be GPL. Sprint 1 does NOT ship a first-party plugin; it wraps the
+   external krita-mcp project.
+
+3. krita-mcp (https://pypi.org/project/krita-mcp/) — Python server + plugin
+   are CC0-1.0 per upstream. Optional native helper is GPL — do not relicense
+   under MIT. We wrap via stdio host config; we do not vendor their sources.
+
+4. Future layout (Sprint 2+ epic):
+     apps/krita-plugin/     → GPL-3.0-or-later
+     apps/mcp-krita/        → MIT (stdio MCP talking HTTP/JSON to plugin)
+   Keep separate LICENSE files; process boundary only (no embedding LibKis
+   into the MIT server).
+
+5. Blender is GPL. Our bpy scripts remain MIT; users run them with Blender.
+   Docs/CI pin: Blender 5.2.3 LTS; supported script range >= 4.2.
