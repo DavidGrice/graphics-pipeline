@@ -28,13 +28,14 @@ test("T3.5: missing Blender binary fails clearly (exit 127)", () => {
 
 test("T3.4: missing inbox PNG fails before Blender invoke", () => {
   // Use a fake blender that would succeed if called — ensure we never reach it
+  // writeFileSync({ mode }) does not chmod an existing file on disk, so always chmodSync.
   const fake = path.join(ROOT, "tests/fixtures/fake-blender.sh");
   fs.mkdirSync(path.dirname(fake), { recursive: true });
   fs.writeFileSync(
     fake,
     "#!/usr/bin/env bash\necho SHOULD_NOT_RUN >&2\nexit 0\n",
-    { mode: 0o755 },
   );
+  fs.chmodSync(fake, 0o755);
   const missing = path.join(ROOT, "data/inbox/no-such-slug/missing.png");
   const out = path.join(ROOT, "data/assets/test-missing/model.glb");
   const r = spawnSync("bash", [PIPELINE, missing, out], {
