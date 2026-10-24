@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "krita": {
+      "command": "uvx",
+      "args": ["krita-mcp"],
+      "env": {}
+    }
+  },
+  "_graphicsPipelineNotes": {
+    "exportTimeoutMs": 60000,
+    "inboxPattern": "data/inbox/{slug}/{YYYYMMDD-HHMMSS}.png",
+    "stableTools": ["health", "export_png"],
+    "adapter": "apps/mcp-krita — wrap krita-mcp now; swap to first-party later"
+  }
+}
