@@ -18,6 +18,23 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
+      - name: Promotion gate
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+          echo "PR base=${base} head=${head}"
+          # Ladder: topic → dev → test → main (prod). Block skip-levels.
+          if [[ "${base}" == "main" && "${head}" != "test" ]]; then
+            echo "::error::PRs into main (prod) must come from test (got head=${head}). Open topic work into dev, then promote."
+            exit 1
+          fi
+          if [[ "${base}" == "test" && "${head}" != "dev" ]]; then
+            echo "::error::PRs into test must come from dev (got head=${head})."
+            exit 1
+          fi
+          echo "OK: promotion path allowed for ${head} → ${base}"
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
         with:
