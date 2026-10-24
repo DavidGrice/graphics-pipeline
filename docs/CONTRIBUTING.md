@@ -28,6 +28,7 @@ Full schematic: [`sprint1.5-ci-branch-schematic.md`](./sprint1.5-ci-branch-schem
 ```bash
 npm ci
 npm run build:schema
+npm run build -w @graphics-pipeline/mcp-krita
 npm run typecheck
 npm run test:s1
 ```
@@ -47,7 +48,7 @@ CI fails if any matching media is **tracked** under `data/`.
 
 - [ ] Branch named `feature/*`, `bug/*`, or `enhancement/*`
 - [ ] Targets **`dev`** (unless promoting `dev`→`test` or `test`→`main`)
-- [ ] CI green (`build-test`: install, schema, typecheck, `test:s1`, data media guard)
+- [ ] CI green (`build-test`: install, schema, mcp-krita build, typecheck, `test:s1`, data media guard)
 - [ ] No secrets or pipeline binaries in the diff
 
 ## What maintainers enable in GitHub UI
@@ -58,3 +59,9 @@ CI fails if any matching media is **tracked** under `data/`.
 4. Dependabot alerts + security updates; secret scanning + push protection  
 
 See also [`SECURITY.md`](../SECURITY.md) and research brief [`sprint1.5-cicd-security-research.md`](./sprint1.5-cicd-security-research.md).
+
+## Agent / architecture docs
+
+- [`../AGENTS.md`](../AGENTS.md) — short pointer
+- [`AGENT_GUIDE.md`](./AGENT_GUIDE.md) — full agent requirements
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — pipeline, facade, envs
