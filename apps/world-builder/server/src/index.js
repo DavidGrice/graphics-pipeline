@@ -48,11 +48,49 @@ app.use(express.json({ limit: "2mb" }));
 // Static disk assets (GLB / preview)
 app.use("/data", express.static(DATA_ROOT));
 
-app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
+app.get("/api/health", async (_req, res) => {
+  /** @type {{ ok: boolean, status: string, detail?: string, error?: string, port?: number }} */
+  let krita = { ok: false, status: "unchecked" };
+  const strict =
+    process.env.HEALTH_STRICT_KRITA === "1" || process.env.SMOKE_LIVE === "1";
+  const skip =
+    process.env.KRITA_HEALTH_MODE === "off" ||
+    process.env.SKIP_KRITA_HEALTH === "1";
+  if (!skip) {
+    try {
+      const port = Number(process.env.KRITA_MCP_PORT || 9797);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1500);
+      const r = await fetch(`http://127.0.0.1:${port}/`, {
+        method: "GET",
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      krita = {
+        ok: true,
+        status: "running",
+        port,
+        detail: `bridge HTTP ${r.status}`,
+      };
+    } catch (err) {
+      krita = {
+        ok: false,
+        status: "down",
+        port: Number(process.env.KRITA_MCP_PORT || 9797),
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  } else {
+    krita = { ok: true, status: "skipped" };
+  }
+  const ok = strict ? krita.ok : true;
+  const status = ok ? 200 : 503;
+  res.status(status).json({
+    ok,
     mongo: Boolean(db),
+    krita,
     dataRoot: DATA_ROOT,
+    strictKrita: strict,
   });
 });
 
