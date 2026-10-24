@@ -1,0 +1,23 @@
+{
+  "name": "graphics-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Krita MCP → Blender GLB → MERN + R3F world builder (Sprint 1 MVP)",
+  "workspaces": [
+    "packages/*",
+    "apps/mcp-krita",
+    "apps/world-builder",
+    "apps/world-builder/client"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:schema": "npm run build -w @graphics-pipeline/asset-schema",
+    "dev:world": "npm run dev -w @graphics-pipeline/world-builder",
+    "dev:client": "npm run dev -w @graphics-pipeline/world-builder-client",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:s1": "node --test tests/s1-*.test.mjs"
+  },
+  "license": "MIT"
+}
