@@ -57,7 +57,8 @@ CI fails if any matching media is **tracked** under `data/`.
 2. Environments **`dev`**, **`test`**, **`prod`** (prod: required reviewers; deploy branches = `main` later)  
 3. Branch protection on `main` (and ideally `dev`/`test`): require PR + status check **CI / build-test**  
 4. Default branch = **`dev`** (so new PRs steer away from prod)  
-5. Dependabot alerts + security updates; secret scanning + push protection  
+5. Auto-delete topic head branches after merge (workflow `delete-merged-branch.yml`; also enable Settings → General → **Automatically delete head branches**)  
+6. Dependabot alerts + security updates; secret scanning + push protection  
 
 See also [`SECURITY.md`](../SECURITY.md) and research brief [`sprint1.5-cicd-security-research.md`](./sprint1.5-cicd-security-research.md).
 
