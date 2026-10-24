@@ -172,8 +172,10 @@ export class KritaMcpAdapter implements KritaBridgeAdapter {
   }
 }
 
-export function createKritaMcpAdapter(
+/** Vendor-only factory (BRIDGE=vendor). Prefer createKritaBridgeAdapter. */
+export function createVendorKritaMcpAdapter(
   opts?: KritaMcpAdapterOptions,
 ): KritaBridgeAdapter {
   return new KritaMcpAdapter(opts);
 }
+
