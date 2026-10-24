@@ -7,11 +7,24 @@ dist/
 build/
 *.tsbuildinfo
 .vite/
+coverage/
+.nyc_output/
 
 # Env / secrets
 .env
 .env.*
 !.env.example
+!.env.*.example
+
+# Keys & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*.keystore
+credentials.json
+**/secrets/**
 
 # OS
 .DS_Store
@@ -24,11 +37,38 @@ Desktop.ini
 !.vscode/settings.json.example
 .idea/
 
-# Pipeline runtime data (keep .gitkeep)
+# Pipeline runtime data (keep .gitkeep) — Designer fail-closed
 data/inbox/**
 !data/inbox/.gitkeep
 data/assets/**
 !data/assets/.gitkeep
+
+# Media / 3D / DCC (accidental drops; no binary fixtures preferred)
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.psd
+*.kra
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.mtl
+*.blend
+*.blend1
+*.blend2
+*.exr
+*.hdr
+
+# ML / large weights
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.ckpt
+models/**
 
 # Python
 __pycache__/
@@ -36,11 +76,5 @@ __pycache__/
 .venv/
 venv/
 
-# Logs / coverage
+# Logs
 *.log
-coverage/
-.nyc_output/
-
-# Blender
-*.blend1
-*.blend2

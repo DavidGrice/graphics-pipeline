@@ -1,0 +1,11 @@
+# Default owner (needs write access on the repo)
+*                         @DavidGrice
+
+# CI / security sensitive
+.github/workflows/        @DavidGrice
+.github/dependabot.yml    @DavidGrice
+.gitignore                @DavidGrice
+
+# Schema & contracts
+packages/asset-schema/    @DavidGrice
+docs/                     @DavidGrice
