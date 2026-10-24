@@ -36,7 +36,9 @@ OBJ is **not** an animated output path (GLB only for clips/skins).
 
 ## S2-A Windows live smoke
 
-Fail-closed path (no `make_demo_glb` substitute):
+Fail-closed path (no `make_demo_glb` substitute).
+
+**Do not** point `BLENDER_BIN` at Microsoft Store `blender-launcher.exe` — use the official installer `blender.exe` (typically under `C:\Program Files\Blender Foundation\Blender 5.2\`). Any `*.png` in the inbox folder works; `YYYYMMDD-HHMMSS` naming is only the `export_png` convention.
 
 ```powershell
 $env:BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
