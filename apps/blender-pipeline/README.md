@@ -36,7 +36,9 @@ OBJ is **not** an animated output path (GLB only for clips/skins).
 
 ## S2-A Windows live smoke
 
-Fail-closed path (no `make_demo_glb` substitute):
+Fail-closed path (no `make_demo_glb` substitute).
+
+**Do not** point `BLENDER_BIN` at Microsoft Store `blender-launcher.exe` — use the official installer `blender.exe` (typically under `C:\Program Files\Blender Foundation\Blender 5.2\`). Any `*.png` in the inbox folder works; `YYYYMMDD-HHMMSS` naming is only the `export_png` convention.
 
 ```powershell
 $env:BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
@@ -48,3 +50,5 @@ $env:SMOKE_LIVE = "1"
 Git Bash / WSL: `SMOKE_LIVE=1 ./apps/blender-pipeline/smoke_live.sh s2a-smoke`
 
 Health is **red** if the Krita MCP bridge (`127.0.0.1:9797`) is down. CI stays on the non-live / demo path without Windows.
+
+`png_to_glb.py` builds a manual textured plane (not `import_as_mesh_planes`) so Blender 5.2 glTF export gets a valid mesh; atomic temp files use `*.tmp.glb`.

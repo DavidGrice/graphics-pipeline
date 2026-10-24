@@ -59,44 +59,136 @@ def _argv_after_double_dash(argv: list[str]) -> list[str]:
 
 def _call_op_tolerant(op, **kwargs):
     """Call bpy operator; drop unknown kwargs on TypeError (version drift)."""
-    try:
-        return op(**kwargs)
-    except TypeError:
-        # Strip kwargs one-by-one until call succeeds or empty
-        keys = list(kwargs.keys())
-        for i in range(len(keys)):
-            trimmed = {k: kwargs[k] for k in keys[: len(keys) - i - 1]}
-            # Actually try removing each key that might be bad — simpler: binary drop
-            pass
-        # Progressive: try without optional keys known to drift
-        optional = (
-            "alpha_mode",
-            "use_transparency",
-            "shader",
-            "size_mode",
-            "height",
-            "align",
-            "relative",
-            "align_axis",
-            "export_apply",
-            "export_yup",
-        )
-        working = dict(kwargs)
-        last_err: Exception | None = None
-        for key in optional:
-            try:
-                return op(**working)
-            except TypeError as err:
-                last_err = err
-                working.pop(key, None)
+    optional = (
+        "alpha_mode",
+        "use_transparency",
+        "shader",
+        "size_mode",
+        "height",
+        "align",
+        "relative",
+        "align_axis",
+        "export_apply",
+        "export_yup",
+        "export_skins",
+        "export_animations",
+        "export_materials",
+        "use_selection",
+    )
+    working = dict(kwargs)
+    last_err: Exception | None = None
+    for _ in range(len(optional) + 1):
         try:
             return op(**working)
         except TypeError as err:
-            raise err from last_err
+            last_err = err
+            dropped = False
+            for key in optional:
+                if key in working:
+                    working.pop(key)
+                    dropped = True
+                    break
+            if not dropped:
+                raise err from last_err
+    raise TypeError("operator call failed after stripping kwargs") from last_err
+
+
+def _mesh_is_exportable(obj) -> bool:
+    """True when mesh has faces and validate reports no remaining corruption."""
+    data = getattr(obj, "data", None)
+    if data is None or not hasattr(data, "polygons"):
+        return False
+    if len(data.polygons) < 1 or len(data.vertices) < 3:
+        return False
+    try:
+        data.update(calc_edges=True)
+    except TypeError:
+        try:
+            data.update()
+        except Exception:
+            pass
+    # validate() returns True if the mesh had errors (and may repair some).
+    try:
+        had_errors = bool(data.validate(verbose=True, clean_customdata=True))
+    except TypeError:
+        try:
+            had_errors = bool(data.validate(verbose=True))
+        except Exception:
+            had_errors = False
+    if had_errors:
+        # One repair pass then re-check face count.
+        try:
+            data.validate(verbose=False, clean_customdata=True)
+        except Exception:
+            pass
+    if len(data.polygons) < 1 or len(data.vertices) < 3:
+        return False
+    # Reject NaN coordinates (common after bad armature weights).
+    for v in data.vertices:
+        co = v.co
+        if not (math.isfinite(co.x) and math.isfinite(co.y) and math.isfinite(co.z)):
+            return False
+    return True
+
+
+def _make_textured_plane(bpy, png_path: Path):
+    """Build a known-valid plane + Principled texture (reliable on Blender 5.2)."""
+    bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0.0, 0.0, 0.0))
+    obj = bpy.context.active_object
+    if obj is None:
+        raise RuntimeError("primitive_plane_add produced no active object")
+    obj.name = "PngPlane"
+    mesh = obj.data
+    mesh.name = "PngPlaneMesh"
+    try:
+        mesh.update(calc_edges=True)
+    except TypeError:
+        mesh.update()
+    mesh.validate(verbose=False)
+
+    img = bpy.data.images.load(str(png_path))
+    img.name = "PngSource"
+    mat = bpy.data.materials.new(name="PngPlaneMat")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.interpolation = "Linear"
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    out = nodes.new("ShaderNodeOutputMaterial")
+    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    if "Alpha" in tex.outputs and "Alpha" in bsdf.inputs:
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        try:
+            mat.blend_method = "HASHED"
+        except Exception:
+            pass
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    mesh.materials.clear()
+    mesh.materials.append(mat)
+
+    if not _mesh_is_exportable(obj):
+        raise RuntimeError("manual textured plane mesh is not exportable")
+    return obj
 
 
 def _import_mesh_plane(bpy, png_path: Path):
-    """Prefer built-in import_as_mesh_planes (4.2+ / 5.x); no legacy addon enable."""
+    """
+    Prefer a manual plane (valid mesh on 5.2). import_as_mesh_planes often yields
+    'Mesh <stem> is not valid' → empty GLB from the glTF exporter.
+    """
+    try:
+        obj = _make_textured_plane(bpy, png_path)
+        print("OK: built textured plane (manual path)")
+        return obj
+    except Exception as manual_err:
+        print(
+            f"WARN: manual plane failed ({manual_err}); trying import_as_mesh_planes",
+            file=sys.stderr,
+        )
+
     op = getattr(bpy.ops.image, "import_as_mesh_planes", None)
     if op is None:
         print(
@@ -121,48 +213,20 @@ def _import_mesh_plane(bpy, png_path: Path):
             shader="PRINCIPLED",
         )
     except Exception as primary:
-        # Manual plane + image texture fallback (still no EEVEE)
-        try:
-            bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0.0, 0.0, 0.0))
-            obj = bpy.context.active_object
-            img = bpy.data.images.load(str(png_path))
-            mat = bpy.data.materials.new(name="PngPlaneMat")
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-            links = mat.node_tree.links
-            nodes.clear()
-            tex = nodes.new("ShaderNodeTexImage")
-            tex.image = img
-            bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-            out = nodes.new("ShaderNodeOutputMaterial")
-            links.new(tex.outputs.get("Color"), bsdf.inputs.get("Base Color"))
-            if "Alpha" in tex.outputs and "Alpha" in bsdf.inputs:
-                links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
-            links.new(bsdf.outputs.get("BSDF"), out.inputs.get("Surface"))
-            if obj.data.materials:
-                obj.data.materials[0] = mat
-            else:
-                obj.data.materials.append(mat)
-            print(
-                f"WARN: import_as_mesh_planes failed ({primary}); "
-                "used manual plane fallback.",
-                file=sys.stderr,
-            )
-            return obj
-        except Exception as fallback_err:
-            print(
-                f"ERROR: failed to import PNG as mesh plane: {primary}\n"
-                f"Fallback also failed: {fallback_err}",
-                file=sys.stderr,
-            )
-            raise SystemExit(3) from fallback_err
+        print(f"ERROR: failed to import PNG as mesh plane: {primary}", file=sys.stderr)
+        raise SystemExit(3) from primary
 
     created = list(set(bpy.data.objects) - before)
-    if created:
-        return created[0]
-    obj = bpy.context.active_object
+    obj = created[0] if created else bpy.context.active_object
     if obj is None:
         print("ERROR: mesh plane import produced no object.", file=sys.stderr)
+        raise SystemExit(3)
+    if not _mesh_is_exportable(obj):
+        print(
+            f"ERROR: imported mesh '{getattr(obj.data, 'name', '?')}' is not valid "
+            "for glTF export.",
+            file=sys.stderr,
+        )
         raise SystemExit(3)
     return obj
 
@@ -170,25 +234,57 @@ def _import_mesh_plane(bpy, png_path: Path):
 def _clear_scene(bpy) -> None:
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
-    for block in (bpy.data.actions, bpy.data.armatures):
+    for block in (
+        bpy.data.actions,
+        bpy.data.armatures,
+        bpy.data.meshes,
+        bpy.data.materials,
+        bpy.data.images,
+    ):
         for item in list(block):
-            block.remove(item)
+            try:
+                block.remove(item)
+            except Exception:
+                pass
+
+
+def _assign_action(bpy, obj, action) -> None:
+    """Blender 5.x uses action slots; fall back to legacy assignment."""
+    if obj.animation_data is None:
+        obj.animation_data_create()
+    ad = obj.animation_data
+    try:
+        ad.action = action
+        return
+    except Exception:
+        pass
+    # 5.0+ layered/slot API
+    try:
+        slot = action.slots.new(id_type="OBJECT", name="Object")
+        ad.action = action
+        if hasattr(ad, "action_slot"):
+            ad.action_slot = slot
+    except Exception as err:
+        print(f"WARN: could not assign action cleanly: {err}", file=sys.stderr)
+        try:
+            ad.action = action
+        except Exception:
+            pass
 
 
 def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
-    """Trivial Y-axis spin 0→90° with ≥2 keyframes. Optional ARMATURE_AUTO."""
+    """Trivial Y-axis spin 0→90° with ≥2 keyframes. Soft armature (no AUTO weights)."""
     obj.rotation_mode = "XYZ"
-    if obj.animation_data is None:
-        obj.animation_data_create()
-
     action = bpy.data.actions.new(name=action_name)
-    obj.animation_data.action = action
+    _assign_action(bpy, obj, action)
 
     obj.rotation_euler = (0.0, 0.0, 0.0)
     obj.keyframe_insert(data_path="rotation_euler", frame=1, index=1)
     obj.rotation_euler = (0.0, math.radians(90.0), 0.0)
     obj.keyframe_insert(data_path="rotation_euler", frame=40, index=1)
 
+    # ARMATURE_AUTO often corrupts thin planes (invalid mesh → empty GLB).
+    # Parent to a single bone without auto-weights; still marks armature present.
     try:
         bpy.ops.object.select_all(action="DESELECT")
         obj.select_set(True)
@@ -200,18 +296,29 @@ def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
         obj.select_set(True)
         arm.select_set(True)
         bpy.context.view_layer.objects.active = arm
-        bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        bpy.ops.object.parent_set(type="OBJECT", keep_transform=True)
+        if not _mesh_is_exportable(obj):
+            print(
+                "WARN: mesh invalid after armature parent; clearing parent.",
+                file=sys.stderr,
+            )
+            bpy.ops.object.select_all(action="DESELECT")
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+            bpy.data.objects.remove(arm, do_unlink=True)
     except Exception as rig_err:
         print(
-            f"WARN: optional armature/auto-weights skipped: {rig_err}",
+            f"WARN: optional armature skipped: {rig_err}",
             file=sys.stderr,
         )
 
 
 def _export_glb(bpy, out_path: Path) -> None:
-    """Write to a temp sibling then rename so a crash never leaves a 'pass' half-GLB."""
+    """Atomic write via sibling *.tmp.glb (must end in .glb for the exporter)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    # Important: extension must be .glb — model.glb.tmp yields empty/partial files.
+    tmp_path = out_path.with_name(out_path.stem + ".tmp.glb")
     if tmp_path.exists():
         tmp_path.unlink()
     gltf = getattr(bpy.ops.export_scene, "gltf", None)
@@ -219,29 +326,56 @@ def _export_glb(bpy, out_path: Path) -> None:
         print("ERROR: export_scene.gltf missing on this Blender build.", file=sys.stderr)
         raise SystemExit(4)
 
+    # Ensure every mesh object is exportable before calling the exporter.
+    for obj in bpy.context.scene.objects:
+        if obj.type == "MESH" and not _mesh_is_exportable(obj):
+            print(
+                f"ERROR: mesh '{obj.data.name}' is not valid for glTF export "
+                f"(verts={len(obj.data.vertices)} faces={len(obj.data.polygons)}).",
+                file=sys.stderr,
+            )
+            raise SystemExit(4)
+
+    has_armature = any(o.type == "ARMATURE" for o in bpy.context.scene.objects)
     kwargs = dict(
         filepath=str(tmp_path),
         export_format="GLB",
         export_animations=True,
-        export_skins=True,
+        export_skins=has_armature,
         export_yup=True,
         export_apply=False,
     )
     try:
         try:
-            _call_op_tolerant(gltf, **kwargs)
+            result = _call_op_tolerant(gltf, **kwargs)
         except Exception as exc:
             try:
-                gltf(
+                result = gltf(
                     filepath=str(tmp_path),
+                    export_format="GLB",
                     export_animations=True,
-                    export_skins=True,
                 )
             except Exception as exc2:
                 print(f"ERROR: GLB export failed: {exc} / {exc2}", file=sys.stderr)
                 raise SystemExit(4) from exc2
+        # Operators return {'FINISHED'} / {'CANCELLED'} set
+        if result is not None and "FINISHED" not in result and "CANCELLED" in result:
+            print(f"ERROR: GLB export cancelled: {result}", file=sys.stderr)
+            raise SystemExit(4)
         if not tmp_path.is_file() or tmp_path.stat().st_size < 12:
-            print(f"ERROR: GLB export produced empty/partial file: {tmp_path}", file=sys.stderr)
+            print(
+                f"ERROR: GLB export produced empty/partial file: {tmp_path}",
+                file=sys.stderr,
+            )
+            raise SystemExit(4)
+        # Minimal GLB magic check
+        with tmp_path.open("rb") as fh:
+            magic = fh.read(4)
+        if magic != b"glTF":
+            print(
+                f"ERROR: export did not write a GLB (magic={magic!r}): {tmp_path}",
+                file=sys.stderr,
+            )
             raise SystemExit(4)
         tmp_path.replace(out_path)
     finally:
@@ -257,10 +391,9 @@ def main() -> None:
     _check_version(bpy)
 
     caps = {
-        "mesh_plane": hasattr(bpy.ops.image, "import_as_mesh_planes"),
         "gltf": hasattr(bpy.ops.export_scene, "gltf"),
     }
-    if not caps["mesh_plane"] or not caps["gltf"]:
+    if not caps["gltf"]:
         print(f"ERROR: missing capabilities: {caps}", file=sys.stderr)
         raise SystemExit(2)
 
@@ -282,6 +415,9 @@ def main() -> None:
     _clear_scene(bpy)
     plane = _import_mesh_plane(bpy, in_png)
     _add_spin_action(bpy, plane, action_name="spin")
+    if not _mesh_is_exportable(plane):
+        print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)
+        raise SystemExit(4)
     _export_glb(bpy, out_glb)
     print(f"OK: wrote {out_glb} (Action=spin)")
 
