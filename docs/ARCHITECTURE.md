@@ -67,20 +67,25 @@ Path contract and tool names **must not change** when the body swaps. License sp
 
 Full invariants: `sprint1-asset-contract.md`. Tests: `npm run test:s1`.
 
-## Promotion path (envs)
+## Promotion path (envs) — enforced
 
 ```
-feature|bug|enhancement/*  →  dev  →  test  →  main
-         (topic)              CI     CI      CI / prod-ready
+feature|bug|enhancement/*  →  dev  →  test  →  main (prod)
+         (topic PRs)           ↑       ↑         ↑
+                          only from   only     only from
+                          topic br.   from     test
+                                      dev
 ```
 
 | Env | Git branch | Role |
 |-----|------------|------|
-| `dev` | `dev` | Integration tip; Dependabot target |
-| `test` | `test` | Pre-prod validation |
-| `prod` | `main` | Protected; release |
+| `dev` | `dev` | **Default branch** · integration tip · Dependabot · all feature/bug/enhancement PRs |
+| `test` | `test` | Pre-prod · accepts PRs **only from `dev`** |
+| `prod` | `main` | Production · accepts PRs **only from `test`** |
 
-Protect **only** `main` / `dev` / `test` with required check **`build-test`**. Topic branches stay direct-push.
+**Agents: never open a PR into `main` or `test` from a topic branch.** Base = **`dev`**. Promote only via `dev`→`test` then `test`→`main` after green `build-test`.
+
+Protect `main` / `dev` / `test` with required check **`build-test`**. Topic branches (`feature|bug|enhancement/*`) stay direct-push.
 
 ## Live vs demo (agents must not confuse these)
 
