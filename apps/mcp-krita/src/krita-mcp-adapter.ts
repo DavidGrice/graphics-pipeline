@@ -22,6 +22,7 @@ import {
   type HealthResult,
   type KritaBridgeAdapter,
 } from "./adapter.js";
+import { probeKritaBridge } from "./krita-bridge-probe.js";
 
 export type KritaMcpAdapterOptions = {
   /** Repo root (contains data/inbox). Defaults to process.cwd() walk-up. */
@@ -58,38 +59,50 @@ export class KritaMcpAdapter implements KritaBridgeAdapter {
   }
 
   async health(): Promise<HealthResult> {
-    // Prefer probing whether the vendor CLI is on PATH; live Krita GUI
-    // reachability is ultimately confirmed by the MCP host calling the
-    // health tool. We fail loud when the wrap cannot even start.
-    try {
-      const probe = await this.runProbe(["--help"]);
-      if (probe.exitCode !== 0 && !probe.stdout && !probe.stderr) {
+    // S2-A: fail-closed on live GUI bridge. CLI-only reachability is not enough.
+    // Set KRITA_HEALTH_MODE=cli for CI/unit dry-runs that must not require Krita.
+    const mode = (process.env.KRITA_HEALTH_MODE || "bridge").toLowerCase();
+    if (mode === "cli") {
+      try {
+        const probe = await this.runProbe(["--help"]);
+        if (probe.exitCode !== 0 && !probe.stdout && !probe.stderr) {
+          return {
+            ok: false,
+            krita: "unknown",
+            error:
+              `krita-mcp wrap not runnable (${this.command} ${this.args.join(" ")}). ` +
+              `Install via: uvx krita-mcp install — and ensure Krita GUI is running.`,
+          };
+        }
+        return {
+          ok: true,
+          krita: "running",
+          detail:
+            "KRITA_HEALTH_MODE=cli: vendor CLI reachable (GUI bridge not probed).",
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
-          krita: "unknown",
-          error:
-            `krita-mcp wrap not runnable (${this.command} ${this.args.join(" ")}). ` +
-            `Install via: uvx krita-mcp install — and ensure Krita GUI is running.`,
+          krita: "down",
+          error: `Krita MCP wrap failed: ${message}.`,
         };
       }
-      // CLI present does not prove Krita GUI is up — callers must treat
-      // MCP-level health as authoritative when the host is connected.
+    }
+
+    const bridge = await probeKritaBridge();
+    if (bridge.ok) {
       return {
         ok: true,
         krita: "running",
-        detail:
-          "Vendor CLI reachable from this process. Confirm Krita GUI via MCP health tool before export.",
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        ok: false,
-        krita: "down",
-        error:
-          `Krita MCP wrap failed: ${message}. ` +
-          `Krita must be installed with GUI running; Sprint 1 wraps krita-mcp (CC0).`,
+        detail: bridge.detail,
       };
     }
+    return {
+      ok: false,
+      krita: "down",
+      error: bridge.error,
+    };
   }
 
   async exportPng(input: ExportPngInput): Promise<ExportPngResult> {
