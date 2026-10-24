@@ -1,7 +1,7 @@
 # Sprint 2-A — Windows live smoke checklist (Researcher)
 
 **Audience:** User (Windows), Engineer, Tester, Designer  
-**Repo tip:** work from **`dev`** @ `7002fb1`+ · live T1 **PASS** (Tester AC on `b7ebcb1` / #26)  
+**Repo tip:** work from **`dev`** · **no PR until Tester signs off live T1**  
 **Goal:** Real path (not demo GLB): **Krita GUI → `export_png` → `BLENDER_BIN` → GLB (`spin`) → R3F plays clip**.  
 **CI:** stays green on Ubuntu **without** Krita/Blender (`npm run test:s1`).
 
@@ -67,7 +67,7 @@ $env:BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 
 ## 4. DoD (Tester S2-A-T1)
 
-- [x] **Live** Windows path signed off (real PNG→GLB, not demo asset alone)  
+- [ ] **Live** Windows path signed off (real PNG→GLB, not demo asset alone)  
 - [ ] `health` **red** when Krita down  
 - [ ] `BLENDER_BIN` **fail-closed** when missing/wrong  
 - [ ] GLB has playable Action; R3F plays clip  
@@ -89,7 +89,7 @@ $env:BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 ```
 
 **Pass signals:** `data/assets/{id}/model.glb` with Action `spin`; asset registered (e.g. `s2a-smoke`); script exit 0.  
-**Known traps (fixed on #26):** `smoke_live.ps1` ParserError; Windows spawn `status: null` vs 127 (Git Bash helper); Store `blender-launcher.exe` rejected. API down → skips until `dev:world`.
+**Known traps:** `smoke_live.ps1` quote/ParserError (fixed on bug branch); Windows spawn `status: null` vs 127 (Git Bash helper); API down → skips.
 
 ---
 

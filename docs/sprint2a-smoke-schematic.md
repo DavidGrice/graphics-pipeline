@@ -4,7 +4,7 @@
 **Owner story:** S2-A-D1  
 **Locks:** A→B→C · hold B/C until A DoD · pin Blender **5.2.3** · GLB + `spin` · no media in git  
 **Companions:** `docs/sprint2-cut-draft.md` · `docs/sprint2a-windows-smoke-checklist.md` · Tester S2-A AC  
-**Status:** Live Windows smoke **PASS** (asset `0d0ef649-…` / `s2a-smoke`). Bug #26 on `dev` @ `7002fb1`. Docs PR → `dev`.
+**Status:** Live Windows smoke **PASS** (model.glb + `spin` + registered `s2a-smoke`) — docs PR after bugfix merges to `dev`.
 
 ---
 
@@ -108,4 +108,4 @@ data/
 | This schematic | `docs/sprint2a-smoke-schematic.md` |
 | Researcher checklist | `docs/sprint2a-windows-smoke-checklist.md` |
 
-**Branch:** `docs/s2a-windows-smoke` → **`dev`**. One PR: this schematic + Researcher checklist.
+**Branch:** `docs/s2a-windows-smoke` → **`dev`** only after Tester AC + bug/s2a-win-smoke-exitcodes merged. One PR, both files.
