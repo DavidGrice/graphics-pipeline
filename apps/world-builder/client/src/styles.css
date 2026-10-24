@@ -1,0 +1,114 @@
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  font-family: system-ui, sans-serif;
+  background: #0f1115;
+  color: #e8eaed;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+}
+.sidebar {
+  border-right: 1px solid #2a2f3a;
+  padding: 1rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.sidebar h1 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+.muted { opacity: 0.65; font-size: 13px; margin: 0; }
+.err { color: #f88; font-size: 13px; }
+.search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #161a22;
+  color: inherit;
+}
+.asset-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+}
+button.asset {
+  background: transparent;
+  color: inherit;
+  border: 1px solid #333;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  margin-bottom: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+button.asset.active {
+  background: #2a4a7a;
+  border-color: #3d6aaa;
+}
+button.primary {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #3d6aaa;
+  background: #1e3a5f;
+  color: inherit;
+  cursor: pointer;
+}
+.register textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #161a22;
+  color: inherit;
+  border: 1px solid #333;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.viewer {
+  position: relative;
+  min-height: 0;
+}
+.viewer canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+.clip-bar {
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+}
+.clip-bar .meta {
+  font-size: 13px;
+  opacity: 0.85;
+}
+.clip-bar button:disabled,
+.clip-bar select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.viewer-err {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  color: #f88;
+  background: rgba(0,0,0,0.55);
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+}
+button, select { font: inherit; }
