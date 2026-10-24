@@ -209,14 +209,18 @@ def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
 
 
 def _export_glb(bpy, out_path: Path) -> None:
+    """Write to a temp sibling then rename so a crash never leaves a 'pass' half-GLB."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
     gltf = getattr(bpy.ops.export_scene, "gltf", None)
     if gltf is None:
         print("ERROR: export_scene.gltf missing on this Blender build.", file=sys.stderr)
         raise SystemExit(4)
 
     kwargs = dict(
-        filepath=str(out_path),
+        filepath=str(tmp_path),
         export_format="GLB",
         export_animations=True,
         export_skins=True,
@@ -224,18 +228,28 @@ def _export_glb(bpy, out_path: Path) -> None:
         export_apply=False,
     )
     try:
-        _call_op_tolerant(gltf, **kwargs)
-    except Exception as exc:
-        # Fallback: filepath .glb may infer binary if export_format enum differs
         try:
-            gltf(
-                filepath=str(out_path),
-                export_animations=True,
-                export_skins=True,
-            )
-        except Exception as exc2:
-            print(f"ERROR: GLB export failed: {exc} / {exc2}", file=sys.stderr)
-            raise SystemExit(4) from exc2
+            _call_op_tolerant(gltf, **kwargs)
+        except Exception as exc:
+            try:
+                gltf(
+                    filepath=str(tmp_path),
+                    export_animations=True,
+                    export_skins=True,
+                )
+            except Exception as exc2:
+                print(f"ERROR: GLB export failed: {exc} / {exc2}", file=sys.stderr)
+                raise SystemExit(4) from exc2
+        if not tmp_path.is_file() or tmp_path.stat().st_size < 12:
+            print(f"ERROR: GLB export produced empty/partial file: {tmp_path}", file=sys.stderr)
+            raise SystemExit(4)
+        tmp_path.replace(out_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def main() -> None:

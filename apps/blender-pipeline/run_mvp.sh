@@ -4,7 +4,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SLUG="${1:-hero-billboard}"
+SLUG="${1:-s2a-smoke}"
 API="${API:-http://127.0.0.1:8787}"
 SMOKE_LIVE="${SMOKE_LIVE:-0}"
 BLENDER_BIN="${BLENDER_BIN:-blender}"

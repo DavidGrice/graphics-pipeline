@@ -27,7 +27,7 @@ async function main() {
   const args = process.argv.slice(2);
   const demo = args.includes("--demo-png");
   const slugArg = args.find((a) => a.startsWith("--slug="));
-  const slug = slugArg?.split("=")[1] || "hero-billboard";
+  const slug = slugArg?.split("=")[1] || "s2a-smoke";
 
   const adapter = createKritaMcpAdapter({ repoRoot: REPO_ROOT });
   console.log("[smoke] health…");

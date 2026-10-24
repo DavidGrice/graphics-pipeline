@@ -21,4 +21,7 @@ if ! node --input-type=module -e "
   exit 1
 fi
 
+if [[ $# -eq 0 ]]; then
+  set -- s2a-smoke
+fi
 exec "${SCRIPT_DIR}/run_mvp.sh" "$@"
