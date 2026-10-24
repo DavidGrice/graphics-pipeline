@@ -27,6 +27,8 @@ jobs:
         run: npm ci
       - name: Build asset schema
         run: npm run build:schema --if-present
+      - name: Build mcp-krita
+        run: npm run build -w @graphics-pipeline/mcp-krita
       - name: Typecheck
         run: npm run typecheck --if-present
       - name: Sprint 1 acceptance tests
