@@ -90,6 +90,17 @@ npm run smoke:demo -w @graphics-pipeline/mcp-krita
 
 Pipeline diagram: `docs/sprint1-pipeline-diagram.md` · Viewer wireframe: `docs/sprint1-viewer-wireframe.md`
 
+
+## Contributing & CI
+
+Branch naming: `feature/*` · `bug/*` · `enhancement/*` → PR into **`dev`** → promote **`test`** → **`main`**.
+
+See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) and [`docs/sprint1.5-ci-branch-schematic.md`](docs/sprint1.5-ci-branch-schematic.md).
+
+CI (GitHub Actions): `npm ci` → `build:schema` → `typecheck` → `test:s1` + forbid tracked media under `data/`.
+
+**You must enable in GitHub Settings:** Actions, Environments `dev`/`test`/`prod`, branch protection, Dependabot, secret scanning / push protection — details in CONTRIBUTING § "What maintainers enable".
+
 ## License
 
 - **Our code:** MIT (`LICENSE`)
@@ -103,3 +114,8 @@ Pipeline diagram: `docs/sprint1-pipeline-diagram.md` · Viewer wireframe: `docs/
 - `docs/sprint1-asset-contract.md` ← **authoritative Mongo schema**
 - `docs/sprint1-followups-licensing-blender-api.md`
 - `docs/sprint1-tester-ac.md`
+- `docs/CONTRIBUTING.md`
+- `docs/sprint1.5-ci-branch-schematic.md`
+- `docs/sprint1.5-cicd-security-research.md`
+- `docs/sprint15-tester-ac.md`
+- `SECURITY.md`
