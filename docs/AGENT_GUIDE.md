@@ -165,7 +165,7 @@ feature/* | bug/* | enhancement/*
 | Promotion | `dev` → `test` (only from `dev`) → `main` **prod** (only from `test`) |
 | Default branch | **`dev`** (GitHub UI) |
 | CI workflow | `.github/workflows/ci.yml` — job **`build-test`** |
-| CI steps | `npm ci` → `build:schema` → build mcp-krita → `typecheck` → **`test:s1`** → forbid tracked media under `data/` |
+| CI steps | **Promotion gate** (PR only) → `npm ci` → `build:schema` → build mcp-krita → `typecheck` → **`test:s1`** → forbid tracked media under `data/` |
 | Triggers | `pull_request` + `push` to `dev`/`test`/`main`; `workflow_dispatch` |
 | Token | `permissions: contents: read` |
 

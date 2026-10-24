@@ -26,6 +26,7 @@ jobs:
               ;;
           esac
           echo "Deleting heads/${BRANCH} from ${REPO}"
+          # 204 = deleted; 422/404 = already gone
           code=$(curl -sS -o /tmp/del.json -w "%{http_code}" -X DELETE \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
