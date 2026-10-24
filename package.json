@@ -19,7 +19,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test:s1": "node --test tests/s1-*.test.mjs tests/s2a-*.test.mjs",
     "smoke:live": "bash apps/blender-pipeline/smoke_live.sh",
-    "test:s2a": "node --test tests/s2a-*.test.mjs"
+    "test:s2a": "node --test tests/s2a-*.test.mjs",
+    "test:s2b": "node --test tests/s2b-*.test.mjs"
   },
   "license": "MIT"
 }
