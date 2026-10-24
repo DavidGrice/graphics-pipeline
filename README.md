@@ -93,11 +93,13 @@ Copy `apps/mcp-krita/host-config.example.json` into your MCP host (Grok Build / 
 ## Branching & CI
 
 ```
-feature|bug|enhancement/*  →  dev  →  test  →  main
+feature|bug|enhancement/*  →  dev  →  test  →  main (prod)
 ```
 
-- Required check: **`build-test`** (see `.github/workflows/ci.yml`)  
-- Protect only `main` / `dev` / `test` (not short-lived topic branches)  
+- **Default branch = `dev`.** All feature/bug/enhancement PRs target **`dev` only**.  
+- **`main` is prod** — accepts merges **only from `test`** (never from topic branches).  
+- **`test`** accepts merges **only from `dev`**.  
+- Required check: **`build-test`** (`.github/workflows/ci.yml`)  
 - Dependabot: **patch/minor → `dev`**, ignore majors  
 
 Details: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) · [`docs/sprint1.5-ci-branch-schematic.md`](docs/sprint1.5-ci-branch-schematic.md)

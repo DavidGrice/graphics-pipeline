@@ -161,10 +161,11 @@ feature/* | bug/* | enhancement/*
 | Rule | Detail |
 |------|--------|
 | Work branches | Prefix `feature/`, `bug/`, or `enhancement/` + kebab slug |
-| Default PR base | **`dev`** |
-| Promotion | `dev` → `test` → `main` via PRs |
+| Default PR base | **`dev` only** — **never** open topic PRs into `main` or `test` |
+| Promotion | `dev` → `test` (only from `dev`) → `main` **prod** (only from `test`) |
+| Default branch | **`dev`** (GitHub UI) |
 | CI workflow | `.github/workflows/ci.yml` — job **`build-test`** |
-| CI steps | `npm ci` → `build:schema` → build mcp-krita → `typecheck` → **`test:s1`** → forbid tracked media under `data/` |
+| CI steps | **Promotion gate** (PR only) → `npm ci` → `build:schema` → build mcp-krita → `typecheck` → **`test:s1`** → forbid tracked media under `data/` |
 | Triggers | `pull_request` + `push` to `dev`/`test`/`main`; `workflow_dispatch` |
 | Token | `permissions: contents: read` |
 
@@ -214,7 +215,7 @@ npm run test:s1
 Checklist:
 
 - [ ] Branch named `feature/*`, `bug/*`, or `enhancement/*` (or documented promotion PR)
-- [ ] Base branch is **`dev`** unless promoting `dev`→`test` or `test`→`main`
+- [ ] Base branch is **`dev`** for all feature/bug/enhancement work — **never `main`**. Promotion PRs only: `dev`→`test`, `test`→`main`
 - [ ] `test:s1` green locally; expect CI job `build-test` green
 - [ ] No secrets, `.env`, or `data/**` media in the diff
 - [ ] Format rules respected (no OBJ+clips); asset contract updated if schema changed
@@ -234,6 +235,7 @@ Checklist:
 | Auth, GridFS, multi-user world editing | Later |
 | Committing pipeline binaries to git | Forbidden |
 | Relicensing GPL Krita plugin code as MIT | Forbidden |
+| Opening `feature|bug|enhancement` PRs into `main` | Forbidden — `main` is prod via `test` only |
 
 ---
 
