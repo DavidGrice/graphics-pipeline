@@ -78,3 +78,8 @@ venv/
 
 # Logs
 *.log
+
+# S2-D: allow tiny smoke PNG fixtures (not data/**)
+!tests/fixtures/
+!tests/fixtures/**.png
+!tests/fixtures/*.png
