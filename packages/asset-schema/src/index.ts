@@ -55,6 +55,41 @@ export const ClipUxSchema = z
   })
   .optional();
 
+/** Contract clip names (required ∪ allowlist ∪ billboard spin). */
+export const CONTRACT_CLIP_NAMES = [
+  "idle",
+  "walk",
+  "run",
+  "spin",
+  "jump",
+  "wave",
+  "attack",
+  "death",
+  "sit",
+] as const;
+
+export type ContractClipName = (typeof CONTRACT_CLIP_NAMES)[number];
+
+/** True for allowlisted names or emote_* prefix. */
+export function isContractClipName(name: string): boolean {
+  if ((CONTRACT_CLIP_NAMES as readonly string[]).includes(name)) return true;
+  if (name.startsWith("emote_") && name.length > "emote_".length) return true;
+  return false;
+}
+
+/**
+ * Mixamo/FBX/PNG import provenance (S2-D-E2/E3).
+ * Probe still wins for clips/rig/stage; this only records source honesty.
+ */
+export const ImportMetaSchema = z.object({
+  source: z.enum(["mixamo", "fbx", "png_pipeline", "unknown"]),
+  originalFilename: z.string().optional(),
+  actionMap: z.record(z.string(), z.string()).optional(),
+  boneMapStub: z.string().optional(),
+  characterTypeHint: z.enum(["humanoid", "prop", "unknown"]).optional(),
+  humanoidPngApproved: z.boolean().optional(),
+});
+
 /**
  * Mongo `assets` document — matches Designer Sprint 1 asset contract.
  * Also exposes a simplified `paths` + `format` view for early blueprint consumers.
@@ -69,6 +104,7 @@ export const AssetSchema = z
     tags: z.array(z.string()).default([]),
     clips: z.array(z.string()).default([]),
     clipUx: ClipUxSchema,
+    importMeta: ImportMetaSchema.optional(),
     formats: AssetFormatsSchema,
     rig: AssetRigSchema.default({
       hasArmature: false,
@@ -150,6 +186,90 @@ export const AssetSchema = z
         });
       }
     }
+
+    // --- S2-D-E3: importMeta.actionMap values must be contract clip names ---
+    const actionMap = asset.importMeta?.actionMap;
+    if (actionMap) {
+      for (const [src, dest] of Object.entries(actionMap)) {
+        if (!isContractClipName(dest)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["importMeta", "actionMap", src],
+            message: `actionMap value "${dest}" is not a contract clip name`,
+          });
+        }
+      }
+    }
+
+    // --- S2-D-E3: reject characterType billboard + stage rigged ---
+    if (asset.characterType === "billboard" && asset.stage === "rigged") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["characterType"],
+        message: 'characterType "billboard" is incompatible with stage "rigged"',
+      });
+    }
+
+    // --- S2-D-E3: humanoid honesty gates ---
+    if (asset.characterType === "humanoid") {
+      if (asset.stage !== "rigged") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["characterType"],
+          message: 'characterType "humanoid" requires stage "rigged"',
+        });
+      }
+      if (!asset.rig.hasArmature || !asset.rig.hasWeights) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rig"],
+          message:
+            'characterType "humanoid" requires hasArmature and hasWeights true',
+        });
+      }
+      if (
+        !asset.clips.includes("idle") ||
+        !asset.clips.includes("walk")
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["clips"],
+          message: 'characterType "humanoid" requires clips idle and walk',
+        });
+      }
+
+      const meta = asset.importMeta;
+      if (!meta) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["importMeta"],
+          message:
+            'characterType "humanoid" requires importMeta provenance',
+        });
+      } else {
+        // png_pipeline alone is dishonest unless Designer flag is set.
+        const provenanceOk =
+          meta.source === "mixamo" ||
+          meta.source === "fbx" ||
+          Boolean(meta.boneMapStub) ||
+          meta.humanoidPngApproved === true;
+        if (meta.source === "png_pipeline" && meta.humanoidPngApproved !== true) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["importMeta", "source"],
+            message:
+              'characterType "humanoid" rejected for source "png_pipeline" without humanoidPngApproved',
+          });
+        } else if (!provenanceOk) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["importMeta"],
+            message:
+              'characterType "humanoid" requires provenance: source mixamo|fbx, boneMapStub, or humanoidPngApproved',
+          });
+        }
+      }
+    }
   });
 
 export type AssetSlug = z.infer<typeof AssetSlugSchema>;
@@ -158,6 +278,7 @@ export type AssetStage = z.infer<typeof AssetStageSchema>;
 export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
 export type ClipUx = z.infer<typeof ClipUxSchema>;
+export type ImportMeta = z.infer<typeof ImportMetaSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 
 /** Blueprint-compatible flattened paths view (derived). */
