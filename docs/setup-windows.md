@@ -78,7 +78,7 @@ $env:SMOKE_LIVE = "1"
 ```powershell
 & $env:BLENDER_BIN --background --python apps/blender-pipeline/png_to_glb.py -- `
   data\inbox\s2c-rigged\in.png data\assets\tmp\model.glb --mode rigged
-# expect Actions: idle + walk; armature + weights
+# expect Actions: idle + walk + run; armature + weights
 ```
 
 Or: `$env:SMOKE_MODE = "rigged"` if scripts accept it (see Engineer tip README).
@@ -93,7 +93,7 @@ Or: `$env:SMOKE_MODE = "rigged"` if scripts accept it (see Engineer tip README).
 | `health` (firstparty) | ok on `:19876` |
 | `export_png` | file under `data\inbox\{slug}\*.png` |
 | billboard GLB | Action `spin` |
-| rigged GLB | Actions `idle` + `walk`; skins/weights true |
+| rigged GLB | Actions `idle` + `walk` + `run`; skins/weights true |
 | register | asset id + `clips` + `rig` on API |
 
 ---

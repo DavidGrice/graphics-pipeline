@@ -16,7 +16,7 @@ export BLENDER_BIN=/path/to/blender   # optional
 # billboard (default): mesh plane + Action `spin` (no armature)
 MODE=billboard ./pipeline.sh in.png out.glb
 
-# rigged: mesh + armature + vertex weights + Actions `idle` + `walk`
+# rigged: mesh + armature + vertex weights + Actions `idle` + `walk` + `run`
 MODE=rigged ./pipeline.sh in.png out-rigged.glb
 
 # equivalent — args AFTER --

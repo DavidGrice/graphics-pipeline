@@ -18,7 +18,7 @@ Cold reader can run **Linux box E2E** and **Windows live smoke** with only these
 | Vendor bridge | `BRIDGE=vendor` (default) → `127.0.0.1:9797` | same | mock/cli health modes |
 | Firstparty bridge | Import Python Plugin zip → `:19876` | install into `/home/box/.local/share/krita/pykrita/` → `:19876` | mock server OK |
 | Smoke billboard | `smoke_live.ps1` / `--mode billboard` | `SMOKE_MODE=billboard` + `png_to_glb` headless | schema/unit only |
-| Smoke rigged (S2-C) | `--mode rigged` / `SMOKE_MODE=rigged` → `idle`+`walk` | same headless on box | GLB fixture gates |
+| Smoke rigged (S2-C) | `--mode rigged` / `SMOKE_MODE=rigged` → `idle`+`walk`+`run` | same headless on box | GLB fixture gates |
 
 ---
 

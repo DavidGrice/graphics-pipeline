@@ -58,7 +58,7 @@ mkdir -p /tmp/s2c-smoke data/inbox/s2c-rigged
 
 "$BLENDER_BIN" --background --python apps/blender-pipeline/png_to_glb.py -- \
   data/inbox/s2c-rigged/sample.png /tmp/s2c-smoke/rigged.glb --mode rigged
-# expect Actions idle + walk; armature + weights
+# expect Actions idle + walk + run; armature + weights
 ```
 
 Env alternate: `MODE=rigged` / `SMOKE_MODE=rigged` (see `pipeline.sh` / `png_to_glb.py`).
@@ -101,7 +101,7 @@ npm run dev -w @graphics-pipeline/world-builder
 | Mode | Pass |
 |------|------|
 | billboard | GLB Action `spin`; skins=0; register `stage=mvp-billboard`; probed `rig.hasArmature=false` / `hasWeights=false` |
-| rigged | Actions `idle` + `walk`; skins≥1; register `stage=rigged`; probed `rig.hasArmature=true` / `hasWeights=true` |
+| rigged | Actions `idle` + `walk` + `run`; skins≥1; register `stage=rigged`; probed `rig.hasArmature=true` / `hasWeights=true` |
 | unit tests | `npm run test:s1` (+ `test:s2b` / `test:s2c` when present) green **without** live Krita |
 
 Register cold-readers: probe GLB for `clips` + `rig.*` — do not trust caller alone (R1).
