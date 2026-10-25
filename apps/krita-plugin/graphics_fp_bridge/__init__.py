@@ -7,16 +7,46 @@ import json
 import os
 import sys
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-# Defaults match docs/sprint2b-r1 (Researcher): firstparty 19876, vendor 9797.
 DEFAULT_PORT = 19876
 
+def _status_path() -> str:
+    appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(appdata, "krita", "graphics_fp_bridge.status")
+
+
+def _write_status(msg: str) -> None:
+    try:
+        path = _status_path()
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(path, "w", encoding="ascii", errors="replace") as fh:
+            fh.write(msg)
+            if not msg.endswith("\n"):
+                fh.write("\n")
+    except Exception:
+        pass
+
+
 def _log(msg: str) -> None:
-    sys.stderr.write("[graphics_fp_bridge] %s\n" % msg)
+    line = "[graphics_fp_bridge] %s" % msg
+    sys.stderr.write(line + "\n")
     sys.stderr.flush()
+    # Append to status for Windows diagnosis without stderr.
+    try:
+        path = _status_path()
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(path, "a", encoding="ascii", errors="replace") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
 
 
 def _port() -> int:
@@ -50,7 +80,6 @@ def _json_response(handler: BaseHTTPRequestHandler, code: int, body: dict) -> No
 
 
 def _export_png_via_krita(out_path: Path) -> None:
-    """Write current document (or a 1x1 placeholder) to out_path."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         from krita import Krita  # type: ignore
@@ -65,7 +94,6 @@ def _export_png_via_krita(out_path: Path) -> None:
             raise RuntimeError("Krita exportImage failed")
         return
     except Exception:
-        # Headless / unit path: tiny valid PNG so the HTTP contract can be tested.
         png = bytes.fromhex(
             "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
             "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
@@ -133,27 +161,25 @@ class _Handler(BaseHTTPRequestHandler):
 
 _server = None  # type: Optional[ThreadingHTTPServer]
 _thread = None  # type: Optional[threading.Thread]
-_start_error = None  # type: Optional[str]
 
 
 def start_server() -> bool:
-    """Bind 127.0.0.1:KRITA_FP_PORT. Idempotent. Returns True if listening."""
-    global _server, _thread, _start_error
+    """Bind 127.0.0.1:KRITA_FP_PORT. Idempotent."""
+    global _server, _thread
     if _server is not None:
+        _log("already listening on 127.0.0.1:%s" % _port())
         return True
     host, port = "127.0.0.1", _port()
     try:
         server = ThreadingHTTPServer((host, port), _Handler)
     except OSError as exc:
-        _start_error = "bind %s:%s failed: %s" % (host, port, exc)
-        _log(_start_error)
+        _log("bind %s:%s FAILED: %s" % (host, port, exc))
         return False
     _server = server
     _thread = threading.Thread(
         target=_server.serve_forever, name="graphics-fp-bridge", daemon=True
     )
     _thread.start()
-    _start_error = None
     _log("listening on http://%s:%s/health" % (host, port))
     return True
 
@@ -161,7 +187,10 @@ def start_server() -> bool:
 def stop_server() -> None:
     global _server, _thread
     if _server is not None:
-        _server.shutdown()
+        try:
+            _server.shutdown()
+        except Exception:
+            pass
         _server = None
         _thread = None
 
@@ -171,7 +200,22 @@ def restart_server() -> bool:
     return start_server()
 
 
-def _register_extension() -> None:
+def _defer_start() -> None:
+    """Retry bind after Qt event loop is up (Krita 5=PyQt5, 6=PyQt6)."""
+    for mod in ("PyQt5.QtCore", "PyQt6.QtCore"):
+        try:
+            qt = __import__(mod, fromlist=["QTimer"])
+            qt.QTimer.singleShot(0, start_server)
+            qt.QTimer.singleShot(1000, start_server)
+            _log("deferred start via %s" % mod)
+            return
+        except Exception:
+            continue
+    _log("QTimer unavailable; immediate start only")
+
+
+# --- Extension (module-level; SIP-friendly) ---
+try:
     from krita import Extension, Krita  # type: ignore
 
     class GraphicsFpBridgeExtension(Extension):
@@ -179,35 +223,35 @@ def _register_extension() -> None:
             super().__init__(parent)
 
         def setup(self) -> None:
-            # Called once at Krita startup after plugin enable + restart.
             start_server()
 
         def createActions(self, window) -> None:  # noqa: N802, ANN001
-            # Belt-and-suspenders: ensure bind even if setup timing was odd.
             start_server()
             action = window.createAction(
                 "graphics_fp_bridge_restart",
                 "Restart Graphics FP Bridge HTTP",
                 "tools/scripts",
             )
-            action.triggered.connect(lambda: restart_server())
+            action.triggered.connect(restart_server)
 
-    app = Krita.instance()
-    if app is None:
-        raise RuntimeError("Krita.instance() is None during plugin load")
-    app.addExtension(GraphicsFpBridgeExtension(app))
-    _log("extension registered")
+    def _register() -> None:
+        _write_status("boot")
+        _log("module import begin")
+        # Bind ASAP --- do not wait only on Extension.setup.
+        start_server()
+        _defer_start()
+        app = Krita.instance()
+        if app is None:
+            _log("Krita.instance() is None at import")
+            return
+        app.addExtension(GraphicsFpBridgeExtension(app))
+        _log("extension registered")
 
-
-# Krita loads this module when the plugin is enabled (after restart).
-try:
-    _register_extension()
+    _register()
 except Exception as exc:  # noqa: BLE001
-    _log("extension register failed: %s" % exc)
-    # Last resort: still try to bind HTTP if krita imported.
+    _log("boot FAILED: %s" % exc)
+    _log(traceback.format_exc())
     try:
-        import krita  # noqa: F401
-
         start_server()
     except Exception as exc2:  # noqa: BLE001
-        _log("fallback start_server failed: %s" % exc2)
+        _log("emergency start_server FAILED: %s" % exc2)

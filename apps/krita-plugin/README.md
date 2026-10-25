@@ -45,10 +45,17 @@ In-repo artifacts: `graphics_fp_bridge.zip.b64`, `pack.ps1`, `unpack-b64.ps1`, `
 2. **Tools -> Scripts -> Import Python Plugin from File...** (wording may vary slightly by version; look for **Import Python Plugin**).
 3. Select `apps\krita-plugin\graphics_fp_bridge.zip`.
 4. Confirm when prompted.
-5. **Settings -> Configure Krita -> Python Plugin Manager** -> enable **Graphics FP Bridge**.
-6. **Fully quit and restart Krita** (enable alone does not load the plugin until restart). On start the plugin binds `127.0.0.1:19876`.
-7. Verify: `Invoke-WebRequest http://127.0.0.1:19876/health` should return JSON `ok: true`. If not, use **Tools -> Scripts -> Restart Graphics FP Bridge HTTP**.
-8. `$env:BRIDGE = 'firstparty'` then smoke the MCP facade (vendor stays on **9797**).
+5. **Settings -> Configure Krita -> Python Plugin Manager** -> enable **Graphics FP Bridge** (checkbox on; hover for load errors if grayed out).
+6. **Fully quit and restart Krita** (File -> Quit, then reopen). Enable alone does not load the plugin until restart. On start the plugin binds `127.0.0.1:19876`.
+7. Verify health:
+   ```powershell
+   Invoke-RestMethod http://127.0.0.1:19876/health
+   ```
+   Expect JSON with `ok: true`. If not, try **Tools -> Scripts -> Restart Graphics FP Bridge HTTP**.
+8. If still down, paste these to the team:
+   - `%APPDATA%\krita\graphics_fp_bridge.status` (plugin boot/bind log)
+   - `%LOCALAPPDATA%\krita.log` (or Help -> Show Krita Log for bug reports)
+9. `$env:BRIDGE = 'firstparty'` then smoke the MCP facade (vendor stays on **9797**).
 
 ### Optional fallback (manual unzip)
 
@@ -59,7 +66,7 @@ $pykrita = Join-Path $env:APPDATA "krita\pykrita"
 Expand-Archive -Path .\apps\krita-plugin\graphics_fp_bridge.zip -DestinationPath $pykrita -Force
 ```
 
-Then restart Krita and enable the plugin as above.
+Then enable + full restart Krita as above (steps 5-8).
 
 ## License boundary
 
