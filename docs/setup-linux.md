@@ -111,3 +111,17 @@ Register cold-readers: probe GLB for `clips` + `rig.*` — do not trust caller a
 ## 6. What stays on Windows
 
 Krita GUI Import Python Plugin quirks, Store-launcher traps, `smoke_live.ps1` PowerShell — see [`setup-windows.md`](setup-windows.md). Linux owns headless Blender + box Krita bridge + CI unit gates.
+
+---
+
+## 7. S2-D CI Blender smoke (Actions)
+
+On PRs/pushes, job `blender-smoke` installs Blender **5.2.3** headless, sets `BLENDER_BIN`, and runs billboard + rigged rows with `S2D_CLIP_EXPECT` / `S2D_EXPECT_ARMATURE` / `S2D_EXPECT_WEIGHTS` / `S2D_STAGE_EXPECT` (see `apps/blender-pipeline/README.md`). Local equivalent:
+
+```bash
+export BLENDER_BIN=/home/box/tools/blender
+node scripts/ensure-smoke-png.mjs
+SMOKE_MODE=rigged S2D_CLIP_EXPECT=idle,walk,run S2D_EXPECT_ARMATURE=1 \
+  S2D_EXPECT_WEIGHTS=1 S2D_STAGE_EXPECT=rigged \
+  bash -c 'out=/tmp/s2d-r.glb; ./apps/blender-pipeline/pipeline.sh tests/fixtures/smoke-8x8.png "$out"; node scripts/s2d-assert-glb.mjs "$out"'
+```

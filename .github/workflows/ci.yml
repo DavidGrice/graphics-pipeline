@@ -60,3 +60,75 @@ jobs:
             exit 1
           fi
           echo "OK: no tracked data/** media binaries"
+
+  blender-smoke:
+    name: S2-D Blender smoke (${{ matrix.SMOKE_MODE }})
+    runs-on: ubuntu-latest
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - SMOKE_MODE: billboard
+            S2D_CLIP_EXPECT: spin
+            S2D_EXPECT_ARMATURE: "0"
+            S2D_EXPECT_WEIGHTS: "0"
+            S2D_STAGE_EXPECT: mvp-billboard
+          - SMOKE_MODE: rigged
+            S2D_CLIP_EXPECT: idle,walk,run
+            S2D_EXPECT_ARMATURE: "1"
+            S2D_EXPECT_WEIGHTS: "1"
+            S2D_STAGE_EXPECT: rigged
+    env:
+      SMOKE_MODE: ${{ matrix.SMOKE_MODE }}
+      MODE: ${{ matrix.SMOKE_MODE }}
+      S2D_CLIP_EXPECT: ${{ matrix.S2D_CLIP_EXPECT }}
+      S2D_EXPECT_ARMATURE: ${{ matrix.S2D_EXPECT_ARMATURE }}
+      S2D_EXPECT_WEIGHTS: ${{ matrix.S2D_EXPECT_WEIGHTS }}
+      S2D_STAGE_EXPECT: ${{ matrix.S2D_STAGE_EXPECT }}
+      BLENDER_VERSION: "5.2.3"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+      - name: Install npm
+        run: npm ci
+      - name: Ensure smoke PNG fixture
+        run: node scripts/ensure-smoke-png.mjs
+      - name: Cache Blender ${{ env.BLENDER_VERSION }}
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-${{ env.BLENDER_VERSION }}
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+      - name: Download Blender (fail-closed)
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ver="${BLENDER_VERSION}"
+          url="https://download.blender.org/release/Blender${ver%.*}/blender-${ver}-linux-x64.tar.xz"
+          dest="${RUNNER_TEMP}/blender-${ver}"
+          mkdir -p "${dest}"
+          echo "Fetching ${url}"
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/blender.tar.xz" "${url}"
+          tar -xJf "${RUNNER_TEMP}/blender.tar.xz" -C "${dest}" --strip-components=1
+          test -x "${dest}/blender"
+      - name: Set BLENDER_BIN
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/blender-${BLENDER_VERSION}/blender"
+          if [[ ! -x "${bin}" ]]; then
+            echo "::error::BLENDER_BIN missing or not executable: ${bin}"
+            exit 127
+          fi
+          echo "BLENDER_BIN=${bin}" >> "$GITHUB_ENV"
+          "${bin}" --version | head -3
+      - name: Pipeline smoke (${{ matrix.SMOKE_MODE }})
+        run: |
+          set -euo pipefail
+          test -x "${BLENDER_BIN}"
+          out="${RUNNER_TEMP}/s2d-${SMOKE_MODE}.glb"
+          bash apps/blender-pipeline/pipeline.sh tests/fixtures/smoke-8x8.png "${out}"
+          node scripts/s2d-assert-glb.mjs "${out}"
