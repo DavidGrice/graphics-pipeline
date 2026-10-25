@@ -100,9 +100,11 @@ npm run dev -w @graphics-pipeline/world-builder
 
 | Mode | Pass |
 |------|------|
-| billboard | GLB Action `spin`; skins=0; `hasArmature`/`hasWeights` false |
-| rigged | Actions `idle` + `walk`; skins≥1; weights true |
+| billboard | GLB Action `spin`; skins=0; register `stage=mvp-billboard`; probed `rig.hasArmature=false` / `hasWeights=false` |
+| rigged | Actions `idle` + `walk`; skins≥1; register `stage=rigged`; probed `rig.hasArmature=true` / `hasWeights=true` |
 | unit tests | `npm run test:s1` (+ `test:s2b` / `test:s2c` when present) green **without** live Krita |
+
+Register cold-readers: probe GLB for `clips` + `rig.*` — do not trust caller alone (R1).
 
 ---
 
