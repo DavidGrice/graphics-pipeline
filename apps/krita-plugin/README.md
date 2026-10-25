@@ -9,11 +9,11 @@ Sprint 2-B spike: loopback HTTP bridge for the MIT MCP facade.
 
 Optional header `X-Graphics-Token` must match `KRITA_FP_TOKEN` when set.
 
-## Windows install (zip only)
+## Windows install (Krita Import Python Plugin)
 
-**Ship / install as a zip** — do not copy loose folders into `pykrita`.
+**Primary path:** import the zip **inside Krita** — do not hand-copy loose folders into `pykrita`.
 
-### 1) Get `graphics_fp_bridge.zip`
+### 1) Build `graphics_fp_bridge.zip`
 
 On branch `enhancement/s2b-firstparty-bridge`, from repo root in PowerShell:
 
@@ -22,32 +22,39 @@ On branch `enhancement/s2b-firstparty-bridge`, from repo root in PowerShell:
 # → apps\krita-plugin\graphics_fp_bridge.zip
 ```
 
-Fallback (no Compress-Archive): decode the committed artifact:
+Fallback if `Compress-Archive` is unavailable:
 
 ```powershell
 .\apps\krita-plugin\unpack-b64.ps1
 # reads apps\krita-plugin\graphics_fp_bridge.zip.b64 → .zip
 ```
 
-Artifact paths in-repo:
+Zip root layout (what Krita’s importer expects):
 
-- `apps/krita-plugin/graphics_fp_bridge.zip.b64` (text; always in git)
-- `apps/krita-plugin/graphics_fp_bridge.zip` (produced by `pack.ps1` / `unpack-b64.ps1` / `pack.sh`)
+- `graphics_fp_bridge/__init__.py`
+- `graphics_fp_bridge.desktop`
 
-### 2) Unzip into Krita’s pykrita folder
+In-repo artifacts: `graphics_fp_bridge.zip.b64`, `pack.ps1`, `unpack-b64.ps1`, `pack.sh`.
 
-1. Krita → **Settings → Manage Resources → Open Resource Folder** → open `pykrita\`  
-   (usually `%APPDATA%\krita\pykrita\`).
-2. **Expand-Archive** / unzip `graphics_fp_bridge.zip` **into** that folder so you have exactly:
-   - `pykrita\graphics_fp_bridge\` (contains `__init__.py`)
-   - `pykrita\graphics_fp_bridge.desktop`
-3. Restart Krita → **Settings → Configure Krita → Python Plugin Manager** → enable **Graphics FP Bridge**.
-4. `$env:BRIDGE = 'firstparty'` (vendor stays on **9797**).
+### 2) Import in Krita
+
+1. Open **Krita**.
+2. **Tools → Scripts → Import Python Plugin from File…** (wording may vary slightly by version; look for **Import Python Plugin**).
+3. Select `apps\krita-plugin\graphics_fp_bridge.zip`.
+4. Confirm / restart Krita when prompted.
+5. **Settings → Configure Krita → Python Plugin Manager** → enable **Graphics FP Bridge** (if not already on).
+6. `$env:BRIDGE = 'firstparty'` for the MCP facade (vendor stays on **9797**).
+
+### Optional fallback (manual unzip)
+
+Only if Import Python Plugin is missing on your build:
 
 ```powershell
 $pykrita = Join-Path $env:APPDATA "krita\pykrita"
 Expand-Archive -Path .\apps\krita-plugin\graphics_fp_bridge.zip -DestinationPath $pykrita -Force
 ```
+
+Then restart Krita and enable the plugin as above.
 
 ## License boundary
 

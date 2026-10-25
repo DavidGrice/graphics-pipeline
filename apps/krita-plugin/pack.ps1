@@ -16,4 +16,4 @@ if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Force }
 Compress-Archive -Path (Join-Path $Stage "graphics_fp_bridge"), (Join-Path $Stage "graphics_fp_bridge.desktop") -DestinationPath $Out -CompressionLevel Optimal
 Remove-Item -Recurse -Force $Stage
 Write-Host "Wrote $Out"
-Write-Host "Next: Expand-Archive into %APPDATA%\krita\pykrita\ then enable Graphics FP Bridge in Plugin Manager."
+Write-Host "Next: In Krita use Tools → Scripts → Import Python Plugin from File… and select this zip; enable Graphics FP Bridge."
