@@ -155,6 +155,42 @@ app.post("/api/assets", async (req, res) => {
   }
 });
 
+
+app.patch("/api/assets/:id/clip-ux", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const body = req.body ?? {};
+    const clipUx = {
+      defaultClip:
+        typeof body.defaultClip === "string" ? body.defaultClip : undefined,
+      order: Array.isArray(body.order)
+        ? body.order.filter((x) => typeof x === "string")
+        : undefined,
+      disabled: Array.isArray(body.disabled)
+        ? body.disabled.filter((x) => typeof x === "string")
+        : undefined,
+    };
+    const col = collection();
+    const existing = col
+      ? await col.findOne({ id })
+      : memoryAssets.get(id) ?? null;
+    if (!existing) return res.status(404).json({ error: "not found" });
+    const next = {
+      ...existing,
+      clipUx,
+      updatedAt: new Date().toISOString(),
+    };
+    if (col) {
+      await col.updateOne({ id }, { $set: { clipUx, updatedAt: next.updatedAt } });
+    } else {
+      memoryAssets.set(id, next);
+    }
+    res.json(next);
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
 app.get("/api/assets/:id/file", async (req, res) => {
   try {
     const format = (req.query.format || "glb").toString();

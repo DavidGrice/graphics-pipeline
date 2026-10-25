@@ -151,3 +151,25 @@ button, select { font: inherit; }
 }
 .clip.active { border-color: #6af; background: #243050; color: #fff; }
 .empty-clips { font-size: 0.8rem; }
+
+.loop-toggle { font-size: 0.85rem; display: flex; align-items: center; gap: 0.35rem; }
+.scrub { font-size: 0.8rem; display: flex; align-items: center; gap: 0.4rem; flex: 1; min-width: 140px; }
+.scrub input[type="range"] { flex: 1; }
+.clip-author {
+  position: absolute;
+  bottom: 4.2rem;
+  left: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+.author-row { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid #333; border-radius: 6px; padding: 0.15rem 0.35rem; }
+.author-row button { font-size: 0.72rem; padding: 0.1rem 0.35rem; cursor: pointer; }
+.persist-note { margin-left: auto; }
+.persist-note code { font-size: 0.72rem; }

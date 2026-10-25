@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * After png_to_glb: copy preview, probe GLB, POST metadata to Express.
+ * After png_to_glb / import_fbx: copy preview, probe GLB, POST metadata to Express.
  * Usage:
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
+ *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -72,8 +73,8 @@ function probeGlb(filePath) {
 function validateProbed({ stage, clips, hasArmature, hasWeights, formatsGlb }) {
   const errors = [];
   if (stage === "rigged") {
-    if (!clips.includes("idle") || !clips.includes("walk")) {
-      errors.push('stage=rigged requires clips idle and walk');
+    if (!clips.includes("idle") || !clips.includes("walk") || !clips.includes("run")) {
+      errors.push('stage=rigged requires clips idle, walk, and run');
     }
     if (!hasArmature || !hasWeights) {
       errors.push("stage=rigged requires hasArmature and hasWeights true");
@@ -93,6 +94,28 @@ function validateProbed({ stage, clips, hasArmature, hasWeights, formatsGlb }) {
   return errors;
 }
 
+/** Strip fields that are not part of ImportMetaSchema before POST. */
+function sanitizeImportMeta(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const out = {};
+  if (typeof raw.source === "string") out.source = raw.source;
+  if (typeof raw.originalFilename === "string") {
+    out.originalFilename = raw.originalFilename;
+  }
+  if (raw.actionMap && typeof raw.actionMap === "object") {
+    out.actionMap = { ...raw.actionMap };
+  }
+  if (typeof raw.boneMapStub === "string") out.boneMapStub = raw.boneMapStub;
+  if (typeof raw.characterTypeHint === "string") {
+    out.characterTypeHint = raw.characterTypeHint;
+  }
+  if (typeof raw.humanoidPngApproved === "boolean") {
+    out.humanoidPngApproved = raw.humanoidPngApproved;
+  }
+  if (!out.source) return null;
+  return out;
+}
+
 const id = arg("id", randomUUID());
 const slug = arg("slug", "hero-billboard");
 const name = arg("name", slug);
@@ -103,10 +126,11 @@ const api = arg("api", "http://127.0.0.1:8787");
 const modeHint = (arg("mode", process.env.MODE || process.env.SMOKE_MODE || "") || "")
   .trim()
   .toLowerCase();
+const importMetaPath = arg("import-meta", "");
 
 if (!glbSrc) {
   console.error(
-    "Usage: register_asset.mjs --glb <model.glb> [--slug …] [--preview …] [--mode billboard|rigged]",
+    "Usage: register_asset.mjs --glb <model.glb> [--slug …] [--preview …] [--mode billboard|rigged] [--import-meta path.json]",
   );
   process.exit(1);
 }
@@ -117,6 +141,25 @@ if (!fs.existsSync(glbAbs)) {
   process.exit(1);
 }
 
+let importMeta = null;
+if (importMetaPath) {
+  const metaAbs = path.resolve(importMetaPath);
+  if (!fs.existsSync(metaAbs)) {
+    console.error(`ERROR: --import-meta not found: ${metaAbs}`);
+    process.exit(1);
+  }
+  try {
+    importMeta = sanitizeImportMeta(JSON.parse(fs.readFileSync(metaAbs, "utf8")));
+  } catch (err) {
+    console.error(`ERROR: failed to parse --import-meta: ${err}`);
+    process.exit(1);
+  }
+  if (!importMeta) {
+    console.error("ERROR: --import-meta missing required source field");
+    process.exit(1);
+  }
+}
+
 const probed = probeGlb(glbAbs);
 console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights}`,
@@ -125,17 +168,27 @@ console.log(
 // Derive stage from probe (caller --mode is hint only).
 let stage = "mvp-billboard";
 let characterType = "billboard";
-if (
+const riggedGates =
   probed.hasArmature &&
   probed.hasWeights &&
   probed.clips.includes("idle") &&
-  probed.clips.includes("walk")
-) {
+  probed.clips.includes("walk") &&
+  probed.clips.includes("run");
+
+if (riggedGates) {
   stage = "rigged";
-  characterType = "prop";
+  // PNG path stays prop/billboard; Mixamo/FBX may claim humanoid when gates ok.
+  const src = importMeta?.source;
+  if (src === "mixamo" || src === "fbx") {
+    characterType = "humanoid";
+  } else if (importMeta?.humanoidPngApproved === true) {
+    characterType = "humanoid";
+  } else {
+    characterType = "prop";
+  }
 } else if (modeHint === "rigged") {
   console.error(
-    "ERROR: --mode=rigged but GLB probe missing armature/weights/idle/walk — refusing dishonest register",
+    "ERROR: --mode=rigged but GLB probe missing armature/weights/idle/walk/run — refusing dishonest register",
   );
   process.exit(1);
 } else if (probed.clips.includes("spin") || probed.clips.length > 0) {
@@ -187,7 +240,7 @@ const body = {
   name,
   characterType,
   stage,
-  tags: ["sprint2c", stage],
+  tags: ["sprint2d", stage],
   clips: probed.clips,
   formats: {
     glb: `assets/${id}/model.glb`,
@@ -212,6 +265,9 @@ const body = {
   createdAt: now,
   updatedAt: now,
 };
+if (importMeta) {
+  body.importMeta = importMeta;
+}
 
 const res = await fetch(`${api}/api/assets`, {
   method: "POST",
@@ -225,5 +281,5 @@ if (!res.ok) {
 }
 console.log(text);
 console.log(
-  `OK registered ${id} stage=${stage} clips=${probed.clips.join(",")} → ${glbDest}`,
+  `OK registered ${id} stage=${stage} characterType=${characterType} clips=${probed.clips.join(",")} → ${glbDest}`,
 );
