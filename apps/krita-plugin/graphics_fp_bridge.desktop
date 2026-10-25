@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=graphics_fp_bridge
+X-Python-2-Compatible=false
+Name=Graphics FP Bridge
+Comment=Sprint 2-B first-party loopback HTTP bridge (health + export_png)

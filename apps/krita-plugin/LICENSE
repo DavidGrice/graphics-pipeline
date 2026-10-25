@@ -1,0 +1,12 @@
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2026 Graphics Pipeline contributors
+
+This directory (`apps/krita-plugin/`) is licensed under the GNU General Public
+License v3.0 or later, as required for Krita pykrita / LibKis plugins.
+
+The MIT-licensed MCP facade in `apps/mcp-krita/` talks to this plugin only over
+loopback HTTP/JSON and must remain a separate process/package.
+
+Full GPL-3.0 text: https://www.gnu.org/licenses/gpl-3.0.en.html

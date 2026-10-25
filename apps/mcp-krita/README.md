@@ -7,7 +7,14 @@ Stable tool names for Grok Build / VS Code MCP hosts:
 | `health` | Krita GUI reachable |
 | `export_png` | Write PNG under `data/inbox/{slug}/{ts}.png` |
 
-## Sprint 1: wrap `krita-mcp` (do not invent first-party plugin yet)
+## Sprint 2-B: `BRIDGE=vendor|firstparty`
+
+- Default **`BRIDGE=vendor`** → loopback **9797** (krita-mcp).
+- **`BRIDGE=firstparty`** → **19876** (`KRITA_FP_PORT`) — `pack.ps1` → `graphics_fp_bridge.zip`, then Krita **Import Python Plugin** (not a loose `pykrita` folder copy).
+- Tool names stay `health` / `export_png`. Optional `KRITA_FP_TOKEN` / `X-Graphics-Token`.
+- No PR until firstparty Windows spike green.
+
+## Sprint 1: wrap `krita-mcp` (vendor path)
 
 1. Install Krita (GUI) and start it.
 2. Install bridge: `uvx krita-mcp install` (PyPI v1.8.1, CC0 server+plugin) — https://pypi.org/project/krita-mcp/
