@@ -47,10 +47,11 @@ export const AssetRigSchema = z.object({
 });
 
 /** Viewer clip authoring prefs (S2-D) — durable on asset JSON. */
-export const ClipPrefsSchema = z
+export const ClipUxSchema = z
   .object({
     defaultClip: z.string().optional(),
     order: z.array(z.string()).optional(),
+    disabled: z.array(z.string()).optional(),
   })
   .optional();
 
@@ -67,7 +68,7 @@ export const AssetSchema = z
     stage: AssetStageSchema.default("mvp-billboard"),
     tags: z.array(z.string()).default([]),
     clips: z.array(z.string()).default([]),
-    clipPrefs: ClipPrefsSchema,
+    clipUx: ClipUxSchema,
     formats: AssetFormatsSchema,
     rig: AssetRigSchema.default({
       hasArmature: false,
@@ -156,7 +157,7 @@ export type CharacterType = z.infer<typeof CharacterTypeSchema>;
 export type AssetStage = z.infer<typeof AssetStageSchema>;
 export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
-export type ClipPrefs = z.infer<typeof ClipPrefsSchema>;
+export type ClipUx = z.infer<typeof ClipUxSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 
 /** Blueprint-compatible flattened paths view (derived). */
