@@ -44,9 +44,11 @@ In-repo artifacts: `graphics_fp_bridge.zip.b64`, `pack.ps1`, `unpack-b64.ps1`, `
 1. Open **Krita**.
 2. **Tools -> Scripts -> Import Python Plugin from File...** (wording may vary slightly by version; look for **Import Python Plugin**).
 3. Select `apps\krita-plugin\graphics_fp_bridge.zip`.
-4. Confirm / restart Krita when prompted.
-5. **Settings -> Configure Krita -> Python Plugin Manager** -> enable **Graphics FP Bridge** (if not already on).
-6. `$env:BRIDGE = 'firstparty'` for the MCP facade (vendor stays on **9797**).
+4. Confirm when prompted.
+5. **Settings -> Configure Krita -> Python Plugin Manager** -> enable **Graphics FP Bridge**.
+6. **Fully quit and restart Krita** (enable alone does not load the plugin until restart). On start the plugin binds `127.0.0.1:19876`.
+7. Verify: `Invoke-WebRequest http://127.0.0.1:19876/health` should return JSON `ok: true`. If not, use **Tools -> Scripts -> Restart Graphics FP Bridge HTTP**.
+8. `$env:BRIDGE = 'firstparty'` then smoke the MCP facade (vendor stays on **9797**).
 
 ### Optional fallback (manual unzip)
 

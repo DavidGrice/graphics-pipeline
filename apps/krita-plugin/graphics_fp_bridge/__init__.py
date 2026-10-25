@@ -1,17 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Graphics FP Bridge — loopback HTTP for MCP facade (Sprint 2-B spike)."""
+"""Graphics FP Bridge --- loopback HTTP for MCP facade (Sprint 2-B spike)."""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # Defaults match docs/sprint2b-r1 (Researcher): firstparty 19876, vendor 9797.
 DEFAULT_PORT = 19876
+
+def _log(msg: str) -> None:
+    sys.stderr.write("[graphics_fp_bridge] %s\n" % msg)
+    sys.stderr.flush()
 
 
 def _port() -> int:
@@ -22,7 +27,7 @@ def _port() -> int:
         return DEFAULT_PORT
 
 
-def _token() -> str | None:
+def _token() -> Optional[str]:
     tok = os.environ.get("KRITA_FP_TOKEN", "").strip()
     return tok or None
 
@@ -35,7 +40,7 @@ def _check_token(handler: BaseHTTPRequestHandler) -> bool:
     return got == expected
 
 
-def _json_response(handler: BaseHTTPRequestHandler, code: int, body: dict[str, Any]) -> None:
+def _json_response(handler: BaseHTTPRequestHandler, code: int, body: dict) -> None:
     raw = json.dumps(body).encode("utf-8")
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json")
@@ -45,7 +50,7 @@ def _json_response(handler: BaseHTTPRequestHandler, code: int, body: dict[str, A
 
 
 def _export_png_via_krita(out_path: Path) -> None:
-    """Write current document (or a 1×1 placeholder) to out_path."""
+    """Write current document (or a 1x1 placeholder) to out_path."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         from krita import Krita  # type: ignore
@@ -61,7 +66,6 @@ def _export_png_via_krita(out_path: Path) -> None:
         return
     except Exception:
         # Headless / unit path: tiny valid PNG so the HTTP contract can be tested.
-        # 1x1 PNG
         png = bytes.fromhex(
             "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
             "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
@@ -71,7 +75,6 @@ def _export_png_via_krita(out_path: Path) -> None:
 
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
-        # Keep Krita log quiet unless debugging.
         if os.environ.get("KRITA_FP_DEBUG"):
             super().log_message(fmt, *args)
 
@@ -87,7 +90,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "krita": "running",
                     "bridge": "firstparty",
-                    "detail": f"Graphics FP Bridge on 127.0.0.1:{_port()}",
+                    "detail": "Graphics FP Bridge on 127.0.0.1:%s" % _port(),
                 },
             )
             return
@@ -113,12 +116,10 @@ class _Handler(BaseHTTPRequestHandler):
         if not slug and not out:
             _json_response(self, 400, {"ok": False, "error": "slug or outPath required"})
             return
-        if out:
-            out_path = Path(str(out))
-        else:
-            # Caller should pass absolute outPath from the MCP facade.
+        if not out:
             _json_response(self, 400, {"ok": False, "error": "outPath required"})
             return
+        out_path = Path(str(out))
         try:
             _export_png_via_krita(out_path)
             _json_response(
@@ -130,18 +131,31 @@ class _Handler(BaseHTTPRequestHandler):
             _json_response(self, 500, {"ok": False, "error": str(exc)})
 
 
-_server: ThreadingHTTPServer | None = None
-_thread: threading.Thread | None = None
+_server = None  # type: Optional[ThreadingHTTPServer]
+_thread = None  # type: Optional[threading.Thread]
+_start_error = None  # type: Optional[str]
 
 
-def start_server() -> None:
-    global _server, _thread
+def start_server() -> bool:
+    """Bind 127.0.0.1:KRITA_FP_PORT. Idempotent. Returns True if listening."""
+    global _server, _thread, _start_error
     if _server is not None:
-        return
+        return True
     host, port = "127.0.0.1", _port()
-    _server = ThreadingHTTPServer((host, port), _Handler)
-    _thread = threading.Thread(target=_server.serve_forever, name="graphics-fp-bridge", daemon=True)
+    try:
+        server = ThreadingHTTPServer((host, port), _Handler)
+    except OSError as exc:
+        _start_error = "bind %s:%s failed: %s" % (host, port, exc)
+        _log(_start_error)
+        return False
+    _server = server
+    _thread = threading.Thread(
+        target=_server.serve_forever, name="graphics-fp-bridge", daemon=True
+    )
     _thread.start()
+    _start_error = None
+    _log("listening on http://%s:%s/health" % (host, port))
+    return True
 
 
 def stop_server() -> None:
@@ -152,52 +166,48 @@ def stop_server() -> None:
         _thread = None
 
 
-class GraphicsFpBridgeExtension:
-    """Krita extension entry — starts HTTP on enable."""
-
-    def __init__(self, parent=None):  # noqa: ANN001
-        try:
-            from krita import Extension  # type: ignore
-
-            # Subclass dynamically so import works outside Krita for syntax checks.
-            self._base = Extension(parent) if parent is not None else None
-        except Exception:
-            self._base = None
-
-    def setup(self) -> None:
-        start_server()
-
-    def createActions(self, window) -> None:  # noqa: N802, ANN001
-        return
+def restart_server() -> bool:
+    stop_server()
+    return start_server()
 
 
-def createExtension(parent):  # noqa: N802, ANN001
-    try:
-        from krita import Extension  # type: ignore
+def _register_extension() -> None:
+    from krita import Extension, Krita  # type: ignore
 
-        class _Ext(Extension):
-            def __init__(self, p):
-                super().__init__(p)
+    class GraphicsFpBridgeExtension(Extension):
+        def __init__(self, parent):  # noqa: ANN001
+            super().__init__(parent)
 
-            def setup(self):
-                start_server()
+        def setup(self) -> None:
+            # Called once at Krita startup after plugin enable + restart.
+            start_server()
 
-            def createActions(self, window):
-                return
-
-        return _Ext(parent)
-    except Exception:
-        ext = GraphicsFpBridgeExtension(parent)
-        ext.setup()
-        return ext
-
-
-# Auto-start when imported inside Krita after plugin enable.
-try:
-    from krita import Krita  # type: ignore
+        def createActions(self, window) -> None:  # noqa: N802, ANN001
+            # Belt-and-suspenders: ensure bind even if setup timing was odd.
+            start_server()
+            action = window.createAction(
+                "graphics_fp_bridge_restart",
+                "Restart Graphics FP Bridge HTTP",
+                "tools/scripts",
+            )
+            action.triggered.connect(lambda: restart_server())
 
     app = Krita.instance()
-    if app is not None:
-        app.addExtension(createExtension(app))
-except Exception:
-    pass
+    if app is None:
+        raise RuntimeError("Krita.instance() is None during plugin load")
+    app.addExtension(GraphicsFpBridgeExtension(app))
+    _log("extension registered")
+
+
+# Krita loads this module when the plugin is enabled (after restart).
+try:
+    _register_extension()
+except Exception as exc:  # noqa: BLE001
+    _log("extension register failed: %s" % exc)
+    # Last resort: still try to bind HTTP if krita imported.
+    try:
+        import krita  # noqa: F401
+
+        start_server()
+    except Exception as exc2:  # noqa: BLE001
+        _log("fallback start_server failed: %s" % exc2)
