@@ -6,9 +6,10 @@ Usage:
   blender --background --python import_fbx_to_glb.py -- \\
     <in.fbx|in.glb> <out.glb> [--source mixamo|fbx] [--meta-out path.json]
 
-Explicit Action remap only (no silent rename):
-  Idle/Idle_A → idle, Walking/Walk → walk, Running/Run → run,
-  Jump → jump, Wave → wave
+Explicit Action remap only (no silent rename) — S2-E alias v2:
+  Idle*/Standing Idle → idle, Walk*/walk_fwd → walk,
+  Run*/Jogging/Jog → run, Jump*/Wave*/Attack*/Death*/Sit* → allowlist.
+  Tpose/T-Pose/bind intentionally unmapped (do not invent idle).
 
 Fail-closed: no armature OR no weights OR missing idle/walk after remap → non-zero.
 """
@@ -23,16 +24,38 @@ from pathlib import Path
 MIN_VERSION = (4, 2, 0)
 PINNED_DOCS_VERSION = "5.2.3"
 
-# Explicit Mixamo / common FBX → contract clip names (D2 table).
+# Explicit Mixamo / common FBX → contract clip names (S2-E D2 alias v2).
+# Tpose / T-Pose / bind are intentionally ABSENT — strip/keep raw; never map to idle.
 ACTION_REMAP: dict[str, str] = {
+    # idle family
     "Idle": "idle",
     "Idle_A": "idle",
+    "Idle01": "idle",
+    "Idle_Neutral": "idle",
+    "Standing Idle": "idle",
+    # walk family
     "Walking": "walk",
     "Walk": "walk",
+    "Walk_Forward": "walk",
+    "WalkForward": "walk",
+    "walk_fwd": "walk",
+    # run family (+ jogging → run)
     "Running": "run",
     "Run": "run",
+    "Jogging": "run",
+    "Jog": "run",
+    # allowlist extras
     "Jump": "jump",
+    "Jumping": "jump",
     "Wave": "wave",
+    "Waving": "wave",
+    "Attack": "attack",
+    "Punch": "attack",
+    "Slash": "attack",
+    "Death": "death",
+    "Dying": "death",
+    "Sit": "sit",
+    "Sitting": "sit",
 }
 
 
@@ -157,6 +180,28 @@ def _import_file(bpy, in_path: Path) -> None:
         raise SystemExit(1)
 
 
+def _lookup_dest(name: str) -> str | None:
+    """Exact, base (pre-.NNN), then case-insensitive alias; Emote_/Gesture_ → emote_*."""
+    if not name:
+        return None
+    base = name.split(".")[0]
+    for key in (name, base):
+        if key in ACTION_REMAP:
+            return ACTION_REMAP[key]
+    lower_map = {k.lower(): v for k, v in ACTION_REMAP.items()}
+    for key in (name, base):
+        hit = lower_map.get(key.lower())
+        if hit:
+            return hit
+    # Emote_Foo / Gesture_Foo → emote_foo (allowlist prefix)
+    for prefix in ("Emote_", "Gesture_", "emote_", "gesture_"):
+        if base.startswith(prefix) and len(base) > len(prefix):
+            tail = base[len(prefix) :].lower().replace(" ", "_")
+            if tail:
+                return f"emote_{tail}"
+    return None
+
+
 def _remap_actions(bpy) -> dict[str, str]:
     """Rename Actions via ACTION_REMAP only. Returns the map entries used."""
     used: dict[str, str] = {}
@@ -166,7 +211,7 @@ def _remap_actions(bpy) -> dict[str, str]:
         src = action.name
         # Strip Blender push-down suffixes like "Idle.001" for lookup base.
         base = src.split(".")[0] if src else src
-        dest = ACTION_REMAP.get(src) or ACTION_REMAP.get(base)
+        dest = _lookup_dest(src) or _lookup_dest(base)
         if not dest:
             continue
         # Avoid colliding with an already-renamed Action of the same dest.

@@ -76,3 +76,7 @@ node apps/blender-pipeline/register_asset.mjs \
 ## Out of scope (Sprint 3+)
 
 Full Mixamo library matrix, Rigify humanoid retarget, auto bone-map beyond `boneMapStub`.
+
+## S2-E follow-up
+
+Alias table v2 + second fixture path: see **`docs/s2e-mixamo-LIMITS.md`**.
