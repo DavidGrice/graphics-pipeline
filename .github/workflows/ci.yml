@@ -75,7 +75,7 @@ jobs:
             S2D_EXPECT_WEIGHTS: "0"
             S2D_STAGE_EXPECT: mvp-billboard
           - SMOKE_MODE: rigged
-            S2D_CLIP_EXPECT: idle,walk,run
+            S2D_CLIP_EXPECT: idle,walk,run,jump
             S2D_EXPECT_ARMATURE: "1"
             S2D_EXPECT_WEIGHTS: "1"
             S2D_STAGE_EXPECT: rigged
