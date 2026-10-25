@@ -91,6 +91,53 @@ export const ImportMetaSchema = z.object({
 });
 
 /**
+ * S2-E-E3 — minimal multi-asset scene graph stub (not a world editor).
+ * Register-time existence of child assetIds is enforced by the API, not Zod alone.
+ */
+export const SceneNodeTransformSchema = z
+  .object({
+    position: z.tuple([z.number(), z.number(), z.number()]).optional(),
+    rotation: z.tuple([z.number(), z.number(), z.number()]).optional(),
+    scale: z.tuple([z.number(), z.number(), z.number()]).optional(),
+  })
+  .optional();
+
+export const SceneNodeSchema = z.object({
+  id: z.string().min(1),
+  assetId: z.string().min(1),
+  transform: SceneNodeTransformSchema,
+  defaultClip: z.string().optional(),
+});
+
+export const SceneGraphSchema = z
+  .object({
+    version: z.literal(1).default(1),
+    nodes: z.array(SceneNodeSchema).min(1),
+    rootId: z.string().optional(),
+  })
+  .superRefine((scene, ctx) => {
+    const ids = scene.nodes.map((n) => n.id);
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (seen.has(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["nodes"],
+          message: `duplicate scene node id "${id}"`,
+        });
+      }
+      seen.add(id);
+    }
+    if (scene.rootId && !seen.has(scene.rootId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rootId"],
+        message: `rootId "${scene.rootId}" not in nodes[].id`,
+      });
+    }
+  });
+
+/**
  * Mongo `assets` document — matches Designer Sprint 1 asset contract.
  * Also exposes a simplified `paths` + `format` view for early blueprint consumers.
  */
@@ -105,6 +152,7 @@ export const AssetSchema = z
     clips: z.array(z.string()).default([]),
     clipUx: ClipUxSchema,
     importMeta: ImportMetaSchema.optional(),
+    scene: SceneGraphSchema.optional(),
     formats: AssetFormatsSchema,
     rig: AssetRigSchema.default({
       hasArmature: false,
@@ -270,6 +318,49 @@ export const AssetSchema = z
         }
       }
     }
+
+    // --- S2-E-E3: stage=scene stub honesty ---
+    if (asset.stage === "scene") {
+      if (!asset.scene || !asset.scene.nodes || asset.scene.nodes.length < 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["scene"],
+          message:
+            'stage "scene" requires scene.nodes with at least one node',
+        });
+      }
+      if (asset.characterType === "humanoid") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["characterType"],
+          message:
+            'stage "scene" root must not claim characterType "humanoid"',
+        });
+      }
+      if (asset.rig.hasArmature || asset.rig.hasWeights) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rig"],
+          message:
+            'stage "scene" root must not claim armature/weights (aggregate out of scope)',
+        });
+      }
+      if (asset.clips.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["clips"],
+          message:
+            'stage "scene" root clips must be [] (playback is per-node)',
+        });
+      }
+    } else if (asset.scene) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["scene"],
+        message: 'scene graph is only valid when stage is "scene"',
+      });
+    }
+
   });
 
 export type AssetSlug = z.infer<typeof AssetSlugSchema>;
@@ -279,6 +370,8 @@ export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
 export type ClipUx = z.infer<typeof ClipUxSchema>;
 export type ImportMeta = z.infer<typeof ImportMetaSchema>;
+export type SceneNode = z.infer<typeof SceneNodeSchema>;
+export type SceneGraph = z.infer<typeof SceneGraphSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 
 /** Blueprint-compatible flattened paths view (derived). */

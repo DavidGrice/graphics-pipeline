@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
+import { safeParseAsset } from "@graphics-pipeline/asset-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -143,7 +144,55 @@ app.post("/api/assets", async (req, res) => {
           .json({ error: "formats.obj forbidden for animated assets (use GLB or FBX)" });
       }
     }
+
+    // S2-E: schema gates (scene stub, humanoid, formats, …)
+    const parsed = safeParseAsset(body);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((i) => i.message).join("; ");
+      return res.status(400).json({ error: msg, issues: parsed.error.issues });
+    }
+
     const col = collection();
+    const resolveDoc = async (idOrSlug) => {
+      if (col) {
+        return (
+          (await col.findOne({ id: idOrSlug })) ||
+          (await col.findOne({ slug: idOrSlug }))
+        );
+      }
+      for (const doc of memoryAssets.values()) {
+        if (doc.id === idOrSlug || doc.slug === idOrSlug) return doc;
+      }
+      return null;
+    };
+
+    // Scene stub: child assetIds must exist; no nested scenes; defaultClip ∈ child clips
+    if (body.stage === "scene" && body.scene?.nodes) {
+      for (const node of body.scene.nodes) {
+        const child = await resolveDoc(node.assetId);
+        if (!child) {
+          return res.status(400).json({
+            error: `scene node "${node.id}" references unknown assetId "${node.assetId}"`,
+          });
+        }
+        if (child.stage === "scene") {
+          return res.status(400).json({
+            error: `scene node "${node.id}" cannot reference nested stage=scene asset`,
+          });
+        }
+        if (
+          node.defaultClip &&
+          Array.isArray(child.clips) &&
+          child.clips.length > 0 &&
+          !child.clips.includes(node.defaultClip)
+        ) {
+          return res.status(400).json({
+            error: `scene node "${node.id}" defaultClip "${node.defaultClip}" not in child clips`,
+          });
+        }
+      }
+    }
+
     if (col) {
       await col.updateOne({ id: body.id }, { $set: body }, { upsert: true });
     } else {
