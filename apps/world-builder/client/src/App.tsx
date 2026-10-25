@@ -1,6 +1,6 @@
 /**
- * S2-D-E1 — World-builder viewer: clip authoring UX (D1 wire).
- * Persist clipUx (default/order/disabled); loop + scrub; no demo fallback.
+ * S2-E-E1 — World-builder viewer: clip UX + importMeta panel (D1 wire).
+ * Persist clipUx; show importMeta when present; scene stub list; no demo fallback.
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF } from "@react-three/drei";
@@ -13,17 +13,37 @@ type ClipUx = {
   disabled?: string[];
 };
 
+type ImportMetaView = {
+  source?: string;
+  originalFilename?: string;
+  actionMap?: Record<string, string>;
+  boneMapStub?: string;
+  characterTypeHint?: string;
+  humanoidPngApproved?: boolean;
+};
+
 type AssetMeta = {
   id: string;
   slug: string;
   name: string;
   clips?: string[];
   clipUx?: ClipUx;
+  importMeta?: ImportMetaView;
   formats?: { glb?: string; obj?: string; preview?: string };
   rig?: { hasArmature?: boolean; hasWeights?: boolean };
   characterType?: string;
   stage?: string;
   tags?: string[];
+  scene?: {
+    version?: number;
+    nodes?: Array<{
+      id: string;
+      assetId: string;
+      defaultClip?: string;
+      transform?: unknown;
+    }>;
+    rootId?: string;
+  };
 };
 
 const API = "";
@@ -383,7 +403,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 2-D</p>
+        <p className="muted">localhost · Sprint 2-E</p>
         <input
           className="search"
           placeholder="Search…"
@@ -459,6 +479,20 @@ export function App() {
             </span>
             {selected?.characterType && (
               <span className="badge mode">{selected.characterType}</span>
+            )}
+            {selected?.importMeta?.source && (
+              <span
+                className={
+                  selected.importMeta.source === "mixamo"
+                    ? "badge import src-mixamo"
+                    : selected.importMeta.source === "fbx"
+                      ? "badge import src-fbx"
+                      : "badge import src-other"
+                }
+                title="importMeta.source"
+              >
+                {selected.importMeta.source}
+              </span>
             )}
           </div>
         </div>
@@ -633,6 +667,74 @@ export function App() {
             <span className="muted persist-note">
               Persist: asset <code>clipUx</code> (API) + localStorage fallback
             </span>
+          </div>
+        )}
+        {selected?.importMeta && (
+          <div className="import-meta-panel" aria-label="Import metadata">
+            <div className="import-meta-title">Import</div>
+            <div className="import-meta-row">
+              <span className="muted">source</span>
+              <strong>{selected.importMeta.source ?? "—"}</strong>
+            </div>
+            {selected.importMeta.originalFilename && (
+              <div className="import-meta-row">
+                <span className="muted">originalFilename</span>
+                <code>{selected.importMeta.originalFilename}</code>
+              </div>
+            )}
+            {selected.importMeta.boneMapStub && (
+              <div className="import-meta-row">
+                <span className="muted">boneMapStub</span>
+                <code>{selected.importMeta.boneMapStub}</code>
+              </div>
+            )}
+            {selected.importMeta.characterTypeHint && (
+              <div className="import-meta-row">
+                <span className="muted">characterTypeHint</span>
+                <span>{selected.importMeta.characterTypeHint}</span>
+              </div>
+            )}
+            {selected.importMeta.humanoidPngApproved === true && (
+              <div className="import-meta-row">
+                <span className="muted">humanoidPngApproved</span>
+                <span>true</span>
+              </div>
+            )}
+            {selected.importMeta.actionMap &&
+              Object.keys(selected.importMeta.actionMap).length > 0 && (
+                <div className="import-meta-actions">
+                  <span className="muted">actionMap</span>
+                  <div className="action-chips">
+                    {Object.entries(selected.importMeta.actionMap).map(
+                      ([src, dest]) => (
+                        <span key={src} className="action-chip">
+                          {src} → {dest}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
+          </div>
+        )}
+        {selected?.stage === "scene" && selected.scene?.nodes && (
+          <div className="scene-stub-panel" aria-label="Scene stub">
+            <div className="import-meta-title">
+              Scene · {selected.scene.nodes.length} asset
+              {selected.scene.nodes.length === 1 ? "" : "s"}
+            </div>
+            <ul className="scene-node-list">
+              {selected.scene.nodes.map((n) => (
+                <li key={n.id}>
+                  <code>{n.id}</code>
+                  <span className="muted"> → </span>
+                  <code>{n.assetId}</code>
+                  {n.defaultClip ? (
+                    <span className="badge mode">{n.defaultClip}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {loadError && <p className="viewer-err">{loadError}</p>}
