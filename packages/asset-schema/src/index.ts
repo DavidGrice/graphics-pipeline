@@ -218,6 +218,30 @@ export const AssetSchema = z
       }
     }
 
+    // --- S2-G-E3: billboard must not claim jump (spin-only honesty) ---
+    if (
+      (asset.stage === "mvp-billboard" || asset.characterType === "billboard") &&
+      asset.clips.includes("jump")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["clips"],
+        message:
+          'billboard / stage "mvp-billboard" must not claim clip "jump" (spin only)',
+      });
+    }
+
+    // --- S2-G-E3: clipUx.defaultClip must exist in clips[] when set ---
+    if (asset.clipUx?.defaultClip) {
+      if (!asset.clips.includes(asset.clipUx.defaultClip)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["clipUx", "defaultClip"],
+          message: `clipUx.defaultClip "${asset.clipUx.defaultClip}" not in clips[]`,
+        });
+      }
+    }
+
     if (asset.formats.obj && !asset.formats.glb && !asset.formats.fbx) {
       if (asset.clips.length > 0) {
         ctx.addIssue({

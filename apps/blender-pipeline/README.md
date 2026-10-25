@@ -16,7 +16,7 @@ export BLENDER_BIN=/path/to/blender   # optional
 # billboard (default): mesh plane + Action `spin` (no armature)
 MODE=billboard ./pipeline.sh in.png out.glb
 
-# rigged: mesh + armature + vertex weights + Actions `idle` + `walk` + `run`
+# rigged: mesh + armature + vertex weights + Actions `idle` + `walk` + `run` + `jump`
 MODE=rigged ./pipeline.sh in.png out-rigged.glb
 
 # equivalent — args AFTER --
@@ -70,7 +70,7 @@ GitHub Actions job `blender-smoke` (matrix rows A/B) downloads **Blender 5.2.3 L
 | Env key | Billboard | Rigged |
 |---------|-----------|--------|
 | `SMOKE_MODE` / `MODE` | `billboard` | `rigged` |
-| `S2D_CLIP_EXPECT` | `spin` | `idle,walk,run` |
+| `S2D_CLIP_EXPECT` | `spin` | `idle,walk,run,jump` |
 | `S2D_EXPECT_ARMATURE` | `0` | `1` |
 | `S2D_EXPECT_WEIGHTS` | `0` | `1` |
 | `S2D_STAGE_EXPECT` | `mvp-billboard` | `rigged` |

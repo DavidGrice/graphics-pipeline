@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-png_to_glb.py — PNG → GLB headless pipeline (S2-C/S2-D: --mode billboard|rigged; rigged clips idle+walk+run)
+png_to_glb.py — PNG → GLB headless pipeline (S2-C/S2-D: --mode billboard|rigged; rigged clips idle+walk+run+jump)
 
 CI / docs pin: Blender 5.2.3 LTS. Scripts tolerate bpy.app.version >= (4, 2, 0).
 
@@ -429,7 +429,7 @@ def _clear_pose(pb_root, pb_tip) -> None:
 
 
 def _add_rigged_clip_actions(bpy, arm) -> None:
-    """Actions named exactly idle, walk, and run on the armature (S2-D)."""
+    """Actions idle, walk, run, and jump on the armature (S2-D + S2-G jump)."""
     _ensure_pose_mode(bpy, arm)
     pb_root = arm.pose.bones.get("root")
     pb_tip = arm.pose.bones.get("tip")
@@ -477,9 +477,21 @@ def _add_rigged_clip_actions(bpy, arm) -> None:
     _keyframe_bone(pb_root, 24, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
     _keyframe_bone(pb_tip, 24, rot=(0.0, 0.0, 0.0))
 
-    # Leave run as active (all three Actions exist in bpy.data.actions for export).
+    _clear_pose(pb_root, pb_tip)
+
+    # --- jump: root hop + tip tuck (distinct from walk/run) ---
+    jump = bpy.data.actions.new(name="jump")
+    _assign_action(bpy, arm, jump)
+    _keyframe_bone(pb_root, 1, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 1, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 8, loc=(0.0, 0.0, 0.35), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 8, rot=(math.radians(-18.0), 0.0, 0.0))
+    _keyframe_bone(pb_root, 16, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 16, rot=(0.0, 0.0, 0.0))
+
+    # Leave jump as active (all four Actions exist in bpy.data.actions for export).
     _object_mode(bpy)
-    print("OK: Actions idle + walk + run on armature")
+    print("OK: Actions idle + walk + run + jump on armature")
 
 
 def _export_glb(bpy, out_path: Path) -> None:
@@ -578,7 +590,7 @@ def main() -> None:
     else:
         arm = _build_rigged_armature(bpy, plane)
         _add_rigged_clip_actions(bpy, arm)
-        action_note = "Actions=idle,walk,run armature=yes weights=yes"
+        action_note = "Actions=idle,walk,run,jump armature=yes weights=yes"
 
     if not _mesh_is_exportable(plane):
         print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)

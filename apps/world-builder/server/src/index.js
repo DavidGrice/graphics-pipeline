@@ -166,10 +166,27 @@ app.post("/api/assets", async (req, res) => {
       }
       return null;
     };
+    // S2-G-E1: collect all id/slug hits so ambiguous slugs reject (V4a)
+    const resolveAll = async (idOrSlug) => {
+      if (col) {
+        const byId = await col.find({ id: idOrSlug }).toArray();
+        if (byId.length) return byId;
+        return await col.find({ slug: idOrSlug }).toArray();
+      }
+      const out = [];
+      for (const doc of memoryAssets.values()) {
+        if (doc.id === idOrSlug || doc.slug === idOrSlug) out.push(doc);
+      }
+      return out;
+    };
 
-    // S2-F-E1: V4 hard register-time resolve (+ V5 nested, V6b defaultClip, V8 corrupt)
+    // S2-F-E1 / S2-G-E1: V4/V4a hard resolve (+ V5 nested, V6b defaultClip, V8 corrupt)
+    // normalize: persist canonical child id when input was a unique slug
     if (body.stage === "scene" && body.scene?.nodes) {
-      const sceneErr = await validateSceneChildren(body.scene.nodes, resolveDoc);
+      const sceneErr = await validateSceneChildren(body.scene.nodes, resolveDoc, {
+        resolveAll,
+        normalize: true,
+      });
       if (sceneErr) {
         return res.status(400).json({ error: sceneErr });
       }
