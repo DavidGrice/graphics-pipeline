@@ -72,8 +72,8 @@ function probeGlb(filePath) {
 function validateProbed({ stage, clips, hasArmature, hasWeights, formatsGlb }) {
   const errors = [];
   if (stage === "rigged") {
-    if (!clips.includes("idle") || !clips.includes("walk")) {
-      errors.push('stage=rigged requires clips idle and walk');
+    if (!clips.includes("idle") || !clips.includes("walk") || !clips.includes("run")) {
+      errors.push('stage=rigged requires clips idle, walk, and run');
     }
     if (!hasArmature || !hasWeights) {
       errors.push("stage=rigged requires hasArmature and hasWeights true");
@@ -129,13 +129,14 @@ if (
   probed.hasArmature &&
   probed.hasWeights &&
   probed.clips.includes("idle") &&
-  probed.clips.includes("walk")
+  probed.clips.includes("walk") &&
+  probed.clips.includes("run")
 ) {
   stage = "rigged";
   characterType = "prop";
 } else if (modeHint === "rigged") {
   console.error(
-    "ERROR: --mode=rigged but GLB probe missing armature/weights/idle/walk — refusing dishonest register",
+    "ERROR: --mode=rigged but GLB probe missing armature/weights/idle/walk/run — refusing dishonest register",
   );
   process.exit(1);
 } else if (probed.clips.includes("spin") || probed.clips.length > 0) {

@@ -46,6 +46,14 @@ export const AssetRigSchema = z.object({
   blenderVersionTested: z.string().optional(),
 });
 
+/** Viewer clip authoring prefs (S2-D) — durable on asset JSON. */
+export const ClipPrefsSchema = z
+  .object({
+    defaultClip: z.string().optional(),
+    order: z.array(z.string()).optional(),
+  })
+  .optional();
+
 /**
  * Mongo `assets` document — matches Designer Sprint 1 asset contract.
  * Also exposes a simplified `paths` + `format` view for early blueprint consumers.
@@ -59,6 +67,7 @@ export const AssetSchema = z
     stage: AssetStageSchema.default("mvp-billboard"),
     tags: z.array(z.string()).default([]),
     clips: z.array(z.string()).default([]),
+    clipPrefs: ClipPrefsSchema,
     formats: AssetFormatsSchema,
     rig: AssetRigSchema.default({
       hasArmature: false,
@@ -88,11 +97,15 @@ export const AssetSchema = z
     }
 
     if (asset.stage === "rigged") {
-      if (!asset.clips.includes("idle") || !asset.clips.includes("walk")) {
+      if (
+        !asset.clips.includes("idle") ||
+        !asset.clips.includes("walk") ||
+        !asset.clips.includes("run")
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["clips"],
-          message: 'stage "rigged" requires clips idle and walk',
+          message: 'stage "rigged" requires clips idle, walk, and run',
         });
       }
       if (!asset.rig.hasArmature || !asset.rig.hasWeights) {
@@ -143,6 +156,7 @@ export type CharacterType = z.infer<typeof CharacterTypeSchema>;
 export type AssetStage = z.infer<typeof AssetStageSchema>;
 export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
+export type ClipPrefs = z.infer<typeof ClipPrefsSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 
 /** Blueprint-compatible flattened paths view (derived). */

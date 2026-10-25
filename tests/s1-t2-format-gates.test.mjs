@@ -62,7 +62,7 @@ test("T2: mvp-billboard claiming armature/weights fails (S2-C)", () => {
   assert.equal(r.success, false);
 });
 
-test("T2: stage rigged requires idle+walk+armature+weights+glb", () => {
+test("T2: stage rigged requires idle+walk+run+armature+weights+glb", () => {
   const bad = safeParseAsset({
     ...base,
     characterType: "prop",
@@ -75,11 +75,23 @@ test("T2: stage rigged requires idle+walk+armature+weights+glb", () => {
     rig: { hasArmature: true, hasWeights: true },
   });
   assert.equal(bad.success, false);
-  const good = safeParseAsset({
+  const missingRun = safeParseAsset({
     ...base,
     characterType: "prop",
     stage: "rigged",
     clips: ["idle", "walk"],
+    formats: {
+      glb: glbPathFor(base.id),
+      preview: previewPathFor(base.id),
+    },
+    rig: { hasArmature: true, hasWeights: true },
+  });
+  assert.equal(missingRun.success, false);
+  const good = safeParseAsset({
+    ...base,
+    characterType: "prop",
+    stage: "rigged",
+    clips: ["idle", "walk", "run"],
     formats: {
       glb: glbPathFor(base.id),
       preview: previewPathFor(base.id),

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-png_to_glb.py — PNG → GLB headless pipeline (S2-C: --mode billboard|rigged)
+png_to_glb.py — PNG → GLB headless pipeline (S2-C/S2-D: --mode billboard|rigged; rigged clips idle+walk+run)
 
 CI / docs pin: Blender 5.2.3 LTS. Scripts tolerate bpy.app.version >= (4, 2, 0).
 
@@ -422,8 +422,14 @@ def _keyframe_bone(pbone, frame: int, *, loc=None, rot=None) -> None:
         pbone.keyframe_insert(data_path="rotation_euler", frame=frame)
 
 
-def _add_idle_walk_actions(bpy, arm) -> None:
-    """≥2 Actions named exactly idle and walk on the armature."""
+def _clear_pose(pb_root, pb_tip) -> None:
+    for pb in (pb_root, pb_tip):
+        pb.location = (0.0, 0.0, 0.0)
+        pb.rotation_euler = (0.0, 0.0, 0.0)
+
+
+def _add_rigged_clip_actions(bpy, arm) -> None:
+    """Actions named exactly idle, walk, and run on the armature (S2-D)."""
     _ensure_pose_mode(bpy, arm)
     pb_root = arm.pose.bones.get("root")
     pb_tip = arm.pose.bones.get("tip")
@@ -439,10 +445,7 @@ def _add_idle_walk_actions(bpy, arm) -> None:
     _keyframe_bone(pb_tip, 40, rot=(0.0, 0.0, 0.0))
     _keyframe_bone(pb_root, 40, rot=(0.0, 0.0, 0.0), loc=(0.0, 0.0, 0.0))
 
-    # Clear pose before next action so channels don't bleed oddly.
-    for pb in (pb_root, pb_tip):
-        pb.location = (0.0, 0.0, 0.0)
-        pb.rotation_euler = (0.0, 0.0, 0.0)
+    _clear_pose(pb_root, pb_tip)
 
     # --- walk: root bob + tip lean ---
     walk = bpy.data.actions.new(name="walk")
@@ -458,9 +461,25 @@ def _add_idle_walk_actions(bpy, arm) -> None:
     _keyframe_bone(pb_root, 40, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
     _keyframe_bone(pb_tip, 40, rot=(0.0, 0.0, 0.0))
 
-    # Leave walk as active (both Actions exist in bpy.data.actions for export).
+    _clear_pose(pb_root, pb_tip)
+
+    # --- run: faster cycle, bigger root bob + tip lean (distinct from walk) ---
+    run = bpy.data.actions.new(name="run")
+    _assign_action(bpy, arm, run)
+    _keyframe_bone(pb_root, 1, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 1, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 6, loc=(0.0, 0.0, 0.16), rot=(0.0, 0.0, math.radians(12.0)))
+    _keyframe_bone(pb_tip, 6, rot=(math.radians(22.0), 0.0, math.radians(4.0)))
+    _keyframe_bone(pb_root, 12, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 12, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 18, loc=(0.0, 0.0, 0.16), rot=(0.0, 0.0, math.radians(-12.0)))
+    _keyframe_bone(pb_tip, 18, rot=(math.radians(-22.0), 0.0, math.radians(-4.0)))
+    _keyframe_bone(pb_root, 24, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 24, rot=(0.0, 0.0, 0.0))
+
+    # Leave run as active (all three Actions exist in bpy.data.actions for export).
     _object_mode(bpy)
-    print("OK: Actions idle + walk on armature")
+    print("OK: Actions idle + walk + run on armature")
 
 
 def _export_glb(bpy, out_path: Path) -> None:
@@ -558,8 +577,8 @@ def main() -> None:
         action_note = "Action=spin"
     else:
         arm = _build_rigged_armature(bpy, plane)
-        _add_idle_walk_actions(bpy, arm)
-        action_note = "Actions=idle,walk armature=yes weights=yes"
+        _add_rigged_clip_actions(bpy, arm)
+        action_note = "Actions=idle,walk,run armature=yes weights=yes"
 
     if not _mesh_is_exportable(plane):
         print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)
