@@ -14,8 +14,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
 
 function arg(name, fallback) {
-  const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
-  return hit ? hit.slice(name.length + 3) : fallback;
+  const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3);
+  const idx = process.argv.indexOf(`--${name}`);
+  if (idx !== -1 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith("--")) {
+    return process.argv[idx + 1];
+  }
+  return fallback;
 }
 function flag(name) {
   return process.argv.includes(`--${name}`);
