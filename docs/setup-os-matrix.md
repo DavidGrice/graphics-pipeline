@@ -14,9 +14,9 @@ Cold reader can run **Linux box E2E** and **Windows live smoke** with only these
 | Node 20+ | required | required | required |
 | Mongo | optional (in-memory fallback) | optional | n/a for unit |
 | Blender **5.2.3** | `BLENDER_BIN` → official `blender.exe` under Program Files — **not** Store launcher | `BLENDER_BIN=/home/box/tools/blender` (or `/home/box/blender-5.2.3/blender`) | not required for `test:s1`/`test:s2b`/`test:s2c` unit |
-| Krita GUI | required for live `export_png` | install when Leader finishes box Krita; then same bridge smokes | not required |
+| Krita GUI | required for live `export_png` | `/home/box/tools/krita` (5.2.9) · pykrita `/home/box/.local/share/krita/pykrita/` · same bridge smokes | not required |
 | Vendor bridge | `BRIDGE=vendor` (default) → `127.0.0.1:9797` | same | mock/cli health modes |
-| Firstparty bridge | Import Python Plugin zip → `:19876` | same once plugin installable on box | mock server OK |
+| Firstparty bridge | Import Python Plugin zip → `:19876` | install into `/home/box/.local/share/krita/pykrita/` → `:19876` | mock server OK |
 | Smoke billboard | `smoke_live.ps1` / `--mode billboard` | `SMOKE_MODE=billboard` + `png_to_glb` headless | schema/unit only |
 | Smoke rigged (S2-C) | `--mode rigged` / `SMOKE_MODE=rigged` → `idle`+`walk` | same headless on box | GLB fixture gates |
 

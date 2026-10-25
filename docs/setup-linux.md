@@ -1,7 +1,7 @@
 # Linux setup — box / local E2E (copy-paste)
 
 **Audience:** agents on the Graphics box · CI-adjacent headless · **not** a substitute for Windows Krita-GUI quirks  
-**Pin:** Blender **5.2.3**
+**Pin:** Blender **5.2.3** · Krita **5.2.9** (box)
 
 ---
 
@@ -10,16 +10,21 @@
 | Tool | Path / note |
 |------|-------------|
 | Blender 5.2.3 | `BLENDER_BIN=/home/box/tools/blender` (symlink) **or** `/home/box/blender-5.2.3/blender` |
+| Krita 5.2.9 | `/home/box/tools/krita` → `/usr/bin/krita` |
+| pykrita | `/home/box/.local/share/krita/pykrita/` (`~/.local/share/krita/pykrita/`) |
 | Repo | `/workspace/graphics-pipeline` (or clone path) |
-| Krita | Leader installing — document exact binary + `~/.local/share/krita/pykrita/` once live |
 | Node | 20+ via nvm/system |
 
-Verify Blender:
+Verify:
 
 ```bash
 export BLENDER_BIN=/home/box/tools/blender
 "$BLENDER_BIN" --version
 # expect Blender 5.2.3
+
+/home/box/tools/krita --version
+# expect 5.2.x
+ls /home/box/.local/share/krita/pykrita/
 ```
 
 ---
@@ -56,28 +61,30 @@ mkdir -p /tmp/s2c-smoke data/inbox/s2c-rigged
 # expect Actions idle + walk; armature + weights
 ```
 
-Env alternate: `MODE=rigged` / `SMOKE_MODE=rigged` (see `png_to_glb.py` header).
+Env alternate: `MODE=rigged` / `SMOKE_MODE=rigged` (see `pipeline.sh` / `png_to_glb.py`).
 
 Fail-closed:
 
 ```bash
-BLENDER_BIN=/nonexistent/blender \
-  "$BLENDER_BIN" --background --python apps/blender-pipeline/png_to_glb.py -- \
-  in.png out.glb --mode billboard
-# must non-zero; or scripts that resolve BLENDER_BIN exit 127
+# missing binary must fail (do not use make_demo_glb on live path)
+test -x /home/box/tools/blender || echo "BLENDER_BIN missing"
 ```
 
 ---
 
-## 4. Krita bridge on Linux (when GUI/plugin ready)
+## 4. Krita bridge on Linux (box)
 
 ```bash
-export BRIDGE=vendor          # probe 127.0.0.1:9797
-# or
+# Vendor (default) — MCP krita-mcp / facade → 127.0.0.1:9797
+export BRIDGE=vendor
+export KRITA_MCP_PORT=9797
+
+# Firstparty — graphics_fp_bridge in pykrita → :19876
 export BRIDGE=firstparty
 export KRITA_FP_PORT=19876
-# pack zip: bash apps/krita-plugin/pack.sh
-# Install plugin into ~/.local/share/krita/pykrita/ (or Krita Import if available)
+# Pack: bash apps/krita-plugin/pack.sh
+# Install zip contents into /home/box/.local/share/krita/pykrita/graphics_fp_bridge/
+# Enable plugin in Krita → full quit/restart → health on :19876
 ```
 
 Then: facade `health` → `export_png` → inbox → §3 Blender modes → register on `:8787`.
@@ -93,12 +100,12 @@ npm run dev -w @graphics-pipeline/world-builder
 
 | Mode | Pass |
 |------|------|
-| billboard | GLB plays/`spin`; `hasArmature` false |
-| rigged | `idle` + `walk`; skins/weights true |
+| billboard | GLB Action `spin`; skins=0; `hasArmature`/`hasWeights` false |
+| rigged | Actions `idle` + `walk`; skins≥1; weights true |
 | unit tests | `npm run test:s1` (+ `test:s2b` / `test:s2c` when present) green **without** live Krita |
 
 ---
 
 ## 6. What stays on Windows
 
-Krita GUI Import Python Plugin quirks, Store-launcher traps, `smoke_live.ps1` PowerShell — see [`setup-windows.md`](setup-windows.md). Linux owns headless Blender + CI unit gates.
+Krita GUI Import Python Plugin quirks, Store-launcher traps, `smoke_live.ps1` PowerShell — see [`setup-windows.md`](setup-windows.md). Linux owns headless Blender + box Krita bridge + CI unit gates.
