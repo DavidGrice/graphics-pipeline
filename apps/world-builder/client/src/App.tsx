@@ -1,5 +1,6 @@
 /**
- * S1-D3 / S1-E4 — World-builder viewer (wireframe behaviors).
+ * S2-C-E2 — World-builder viewer: clip list + rig/stage badges (C3 wire).
+ * No demo GLB / invented-clip fallback when asset has empty clips.
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF } from "@react-three/drei";
@@ -14,10 +15,17 @@ type AssetMeta = {
   formats?: { glb?: string; obj?: string; preview?: string };
   rig?: { hasArmature?: boolean; hasWeights?: boolean };
   characterType?: string;
+  stage?: string;
   tags?: string[];
 };
 
 const API = "";
+
+function pickDefaultClip(names: string[]): string {
+  if (names.includes("idle")) return "idle";
+  if (names.includes("spin")) return "spin";
+  return names[0] ?? "";
+}
 
 function GltfPlayer({
   url,
@@ -85,8 +93,8 @@ function LoadError({ message }: { message: string }) {
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
-  const [clip, setClip] = useState("spin");
-  const [playing, setPlaying] = useState(true);
+  const [clip, setClip] = useState("");
+  const [playing, setPlaying] = useState(false);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -115,13 +123,18 @@ export function App() {
     refresh();
   }, []);
 
-  useEffect(() => {
-    const fromMeta = selected?.clips?.length ? selected.clips : [];
-    const names = fromMeta.length ? fromMeta : gltfClips;
-    if (names.length) setClip(names[0]!);
-    else setClip("");
-    setPlaying(names.length > 0);
+  // Prefer metadata clips[]; fall back to GLB-probed names only (never invent).
+  const clipsForUi = useMemo(() => {
+    if (selected?.clips && selected.clips.length > 0) return selected.clips;
+    if (gltfClips.length > 0) return gltfClips;
+    return [] as string[];
   }, [selected, gltfClips]);
+
+  useEffect(() => {
+    const next = pickDefaultClip(clipsForUi);
+    setClip(next);
+    setPlaying(next.length > 0);
+  }, [selected?.id, clipsForUi.join("|")]);
 
   const filtered = assets.filter((a) => {
     const q = search.trim().toLowerCase();
@@ -133,20 +146,22 @@ export function App() {
     );
   });
 
-  const clipsForUi =
-    (selected?.clips?.length ? selected.clips : null) ??
-    (gltfClips.length ? gltfClips : []);
   const canPlay = clipsForUi.length > 0;
-  const glbUrl = selected?.formats?.glb
+  const glbUrl = selected
     ? `${API}/api/assets/${selected.id}/file`
-    : selected
-      ? `${API}/api/assets/${selected.id}/file`
-      : null;
+    : null;
   const formatLabel = selected?.formats?.glb
     ? "glb"
     : selected?.formats?.obj
       ? "obj (static)"
       : "—";
+  const stage = selected?.stage ?? "—";
+  const modeBadge =
+    stage === "rigged"
+      ? "Rigged"
+      : stage === "mvp-billboard" || selected?.characterType === "billboard"
+        ? "Billboard"
+        : selected?.characterType ?? "—";
 
   async function submitRegister() {
     try {
@@ -169,7 +184,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 1 MVP</p>
+        <p className="muted">localhost · Sprint 2-C</p>
         <input
           className="search"
           placeholder="Search…"
@@ -217,6 +232,34 @@ export function App() {
         )}
       </aside>
       <div className="viewer">
+        <div className="viewer-header">
+          <div className="asset-title">
+            {selected ? (
+              <>
+                <strong>{selected.name || selected.slug}</strong>
+                <span className="muted"> / {selected.slug}</span>
+              </>
+            ) : (
+              <span className="muted">No asset selected</span>
+            )}
+          </div>
+          <div className="badges" aria-label="Asset badges">
+            <span className="badge stage">{stage}</span>
+            <span className="badge mode">{modeBadge}</span>
+            <span
+              className={
+                selected?.rig?.hasArmature ? "badge on" : "badge off"
+              }
+            >
+              Armature
+            </span>
+            <span
+              className={selected?.rig?.hasWeights ? "badge on" : "badge off"}
+            >
+              Weights
+            </span>
+          </div>
+        </div>
         <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }}>
           <color attach="background" args={["#12151c"]} />
           <ambientLight intensity={0.65} />
@@ -242,12 +285,38 @@ export function App() {
           </Suspense>
         </Canvas>
         <div className="clip-bar">
-          <label>
+          <div className="clip-list" role="listbox" aria-label="Clips">
+            {canPlay ? (
+              clipsForUi.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="option"
+                  aria-selected={clip === c}
+                  className={clip === c ? "clip active" : "clip"}
+                  onClick={() => {
+                    setClip(c);
+                    setPlaying(true);
+                  }}
+                >
+                  {c}
+                </button>
+              ))
+            ) : (
+              <span className="muted empty-clips">
+                No clips on this asset — static / OBJ only (no demo fallback).
+              </span>
+            )}
+          </div>
+          <label className="clip-select">
             Clip:{" "}
             <select
               value={clip}
               disabled={!canPlay}
-              onChange={(e) => setClip(e.target.value)}
+              onChange={(e) => {
+                setClip(e.target.value);
+                setPlaying(true);
+              }}
             >
               {canPlay ? (
                 clipsForUi.map((c) => (
@@ -264,14 +333,10 @@ export function App() {
             type="button"
             disabled={!canPlay}
             onClick={() => setPlaying((p) => !p)}
-            title={canPlay ? "Play / pause" : "No clips — Play disabled (static / OBJ)"}
+            title={canPlay ? "Play / pause" : "No clips — Play disabled"}
           >
             {playing && canPlay ? "Pause" : "▶ Play"}
           </button>
-          <span className="meta">
-            Rig: armature {selected?.rig?.hasArmature ? "✓" : "–"} · weights{" "}
-            {selected?.rig?.hasWeights ? "✓" : "–"}
-          </span>
           <span className="meta">Format: {formatLabel}</span>
         </div>
         {loadError && <p className="viewer-err">{loadError}</p>}

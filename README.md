@@ -52,10 +52,20 @@ AGENTS.md                    # Operating contract for coding agents
 | **Node.js 20+** | `.nvmrc` |
 | **Krita** (GUI) | Required for *live* MCP export. Windows: `%APPDATA%\krita\pykrita\` |
 | **krita-mcp** | `uvx krita-mcp install` — see `apps/mcp-krita/host-config.example.json` |
-| **Blender 5.2.3 LTS** | Set `BLENDER_BIN` if not on `PATH` |
+| **Blender 5.2.3 LTS** | Set `BLENDER_BIN` if not on `PATH`. Linux box: `/home/box/tools/blender` |
 | **MongoDB** | Optional for local demo |
 
 Scaffolding and CI **do not** require Krita/Blender; scripts exit with clear errors when missing.
+
+## Multi-OS setup (replicate smoke)
+
+| OS | Doc |
+|----|-----|
+| **Matrix** | [`docs/setup-os-matrix.md`](docs/setup-os-matrix.md) |
+| **Windows** | [`docs/setup-windows.md`](docs/setup-windows.md) — Blender path, Import Python Plugin, `BRIDGE`, `smoke_live.ps1` |
+| **Linux (box)** | [`docs/setup-linux.md`](docs/setup-linux.md) — `BLENDER_BIN=/home/box/tools/blender`, Krita `/home/box/tools/krita`, headless `billboard\|rigged` |
+
+CI still does **not** need Krita/Blender for `test:s1` / unit gates.
 
 ## Quick start
 

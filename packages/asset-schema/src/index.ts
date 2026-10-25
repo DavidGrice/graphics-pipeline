@@ -86,6 +86,40 @@ export const AssetSchema = z
         });
       }
     }
+
+    if (asset.stage === "rigged") {
+      if (!asset.clips.includes("idle") || !asset.clips.includes("walk")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["clips"],
+          message: 'stage "rigged" requires clips idle and walk',
+        });
+      }
+      if (!asset.rig.hasArmature || !asset.rig.hasWeights) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rig"],
+          message: 'stage "rigged" requires hasArmature and hasWeights true',
+        });
+      }
+      if (!asset.formats.glb) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["formats", "glb"],
+          message: 'stage "rigged" requires formats.glb',
+        });
+      }
+    }
+    if (asset.stage === "mvp-billboard") {
+      if (asset.rig.hasArmature || asset.rig.hasWeights) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rig"],
+          message: 'stage "mvp-billboard" must not claim armature/weights',
+        });
+      }
+    }
+
     if (asset.formats.obj && !asset.formats.glb && !asset.formats.fbx) {
       if (asset.clips.length > 0) {
         ctx.addIssue({
