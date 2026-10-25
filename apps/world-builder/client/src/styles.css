@@ -237,3 +237,27 @@ button, select { font: inherit; }
   align-items: center;
   gap: 0.25rem;
 }
+
+button.scene-node {
+  background: transparent;
+  color: inherit;
+  border: 1px solid #333;
+  width: 100%;
+  text-align: left;
+  padding: 0.3rem 0.4rem;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+}
+button.scene-node.active {
+  border-color: #5b6cff;
+  background: #1a2038;
+}
+.scene-node-xform {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem 0.35rem;
+}
