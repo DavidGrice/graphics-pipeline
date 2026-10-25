@@ -1,0 +1,24 @@
+{
+  "_comment": "S2-F-E3 scene compose fixture shape — JSON only; assetIds are placeholders replaced by test harness with registered ids. No media under data/**.",
+  "stage": "scene",
+  "characterType": "unknown",
+  "clips": [],
+  "rig": { "hasArmature": false, "hasWeights": false },
+  "scene": {
+    "version": 1,
+    "rootId": "n0",
+    "nodes": [
+      {
+        "id": "n0",
+        "assetId": "<registered-billboard-id>",
+        "transform": { "position": [0, 0, 0] }
+      },
+      {
+        "id": "n1",
+        "assetId": "<registered-rigged-id>",
+        "transform": { "position": [2, 0, 0], "scale": [1, 1, 1] },
+        "defaultClip": "idle"
+      }
+    ]
+  }
+}

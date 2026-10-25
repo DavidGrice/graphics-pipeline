@@ -91,8 +91,8 @@ export const ImportMetaSchema = z.object({
 });
 
 /**
- * S2-E-E3 — minimal multi-asset scene graph stub (not a world editor).
- * Register-time existence of child assetIds is enforced by the API, not Zod alone.
+ * S2-E-E3 / S2-F-E1 — minimal multi-asset scene graph stub (not a world editor).
+ * V4 child assetId resolve is HARD at register (API validateSceneChildren); Zod covers V1–V3/V7.
  */
 export const SceneNodeTransformSchema = z
   .object({

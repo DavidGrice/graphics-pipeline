@@ -1,6 +1,6 @@
 /**
- * S2-E-E1 — World-builder viewer: clip UX + importMeta panel (D1 wire).
- * Persist clipUx; show importMeta when present; scene stub list; no demo fallback.
+ * S2-F-E2 — World-builder viewer: clip UX + importMeta + scene compose.
+ * Compose stage=scene children by transform + defaultClip; no demo fallback.
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF } from "@react-three/drei";
@@ -40,7 +40,11 @@ type AssetMeta = {
       id: string;
       assetId: string;
       defaultClip?: string;
-      transform?: unknown;
+      transform?: {
+        position?: [number, number, number];
+        rotation?: [number, number, number];
+        scale?: [number, number, number];
+      };
     }>;
     rootId?: string;
   };
@@ -223,6 +227,97 @@ function GltfPlayer({
   return <primitive object={clone} />;
 }
 
+
+/** S2-F-E2 — place one scene child GLB by transform; play defaultClip when set. */
+function SceneNodeModel({
+  url,
+  clipName,
+  transform,
+  highlighted,
+}: {
+  url: string;
+  clipName?: string;
+  transform?: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+  };
+  highlighted?: boolean;
+}) {
+  const { scene, animations } = useGLTF(url);
+  const mixer = useRef<THREE.AnimationMixer | null>(null);
+  const clone = useMemo(() => scene.clone(true), [scene]);
+  const pos = transform?.position ?? ([0, 0, 0] as [number, number, number]);
+  const rot = transform?.rotation ?? ([0, 0, 0] as [number, number, number]);
+  const scl = transform?.scale ?? ([1, 1, 1] as [number, number, number]);
+
+  useEffect(() => {
+    const m = new THREE.AnimationMixer(clone);
+    mixer.current = m;
+    let action: THREE.AnimationAction | null = null;
+    if (clipName) {
+      const clip =
+        animations.find((a) => a.name === clipName) ?? animations[0] ?? null;
+      if (clip) {
+        action = m.clipAction(clip);
+        action.reset();
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.play();
+      }
+    }
+    let frame = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      m.update(dt);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      m.stopAllAction();
+      mixer.current = null;
+    };
+  }, [clone, animations, clipName]);
+
+  return (
+    <group position={pos} rotation={rot} scale={scl}>
+      <primitive object={clone} />
+      {highlighted ? (
+        <mesh position={[0, 0.05, 0]}>
+          <ringGeometry args={[0.55, 0.65, 32]} />
+          <meshBasicMaterial color="#5b6cff" side={THREE.DoubleSide} />
+        </mesh>
+      ) : null}
+    </group>
+  );
+}
+
+function SceneNodeMissing({
+  transform,
+  label,
+}: {
+  transform?: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+  };
+  label: string;
+}) {
+  const pos = transform?.position ?? ([0, 0, 0] as [number, number, number]);
+  return (
+    <group position={pos}>
+      <mesh>
+        <boxGeometry args={[0.4, 0.4, 0.4]} />
+        <meshStandardMaterial color="#a33" wireframe />
+      </mesh>
+      {/* label reserved for a11y / future Html overlay */}
+      <group userData={{ missingLabel: label }} />
+    </group>
+  );
+}
+
 function LoadError({ message }: { message: string }) {
   return (
     <mesh>
@@ -248,6 +343,7 @@ export function App() {
   const [registerOpen, setRegisterOpen] = useState(false);
   const [regJson, setRegJson] = useState("");
   const [clipUx, setClipUx] = useState<ClipUx>({});
+  const [sceneNodeId, setSceneNodeId] = useState<string | null>(null);
 
   const refresh = () =>
     fetch(`${API}/api/assets`)
@@ -286,10 +382,16 @@ export function App() {
   useEffect(() => {
     if (!selected) {
       setClipUx({});
+      setSceneNodeId(null);
       return;
     }
     setClipUx(mergeClipUx(selected));
-  }, [selected?.id, selected?.clipUx]);
+    if (selected.stage === "scene" && selected.scene?.nodes?.length) {
+      setSceneNodeId(selected.scene.rootId ?? selected.scene.nodes[0]?.id ?? null);
+    } else {
+      setSceneNodeId(null);
+    }
+  }, [selected?.id, selected?.clipUx, selected?.stage, selected?.scene?.rootId]);
 
   useEffect(() => {
     const next = pickDefaultClip(clipsForUi, clipUx);
@@ -360,10 +462,21 @@ export function App() {
     );
   });
 
-  const canPlay = clipsForUi.length > 0;
-  const glbUrl = selected
-    ? `${API}/api/assets/${selected.id}/file`
-    : null;
+  const isScene = selected?.stage === "scene";
+  const sceneNodes = selected?.scene?.nodes ?? [];
+
+  const resolveChild = useCallback(
+    (assetId: string): AssetMeta | null => {
+      return (
+        assets.find((a) => a.id === assetId || a.slug === assetId) ?? null
+      );
+    },
+    [assets],
+  );
+
+  const canPlay = clipsForUi.length > 0 && !isScene;
+  const glbUrl =
+    selected && !isScene ? `${API}/api/assets/${selected.id}/file` : null;
   const formatLabel = selected?.formats?.glb
     ? "glb"
     : selected?.formats?.obj
@@ -371,11 +484,13 @@ export function App() {
       : "—";
   const stage = selected?.stage ?? "—";
   const modeBadge =
-    stage === "rigged"
-      ? "Rigged"
-      : stage === "mvp-billboard" || selected?.characterType === "billboard"
-        ? "Billboard"
-        : selected?.characterType ?? "—";
+    stage === "scene"
+      ? "Scene"
+      : stage === "rigged"
+        ? "Rigged"
+        : stage === "mvp-billboard" || selected?.characterType === "billboard"
+          ? "Billboard"
+          : selected?.characterType ?? "—";
 
   async function submitRegister() {
     try {
@@ -403,7 +518,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 2-E</p>
+        <p className="muted">localhost · Sprint 2-F</p>
         <input
           className="search"
           placeholder="Search…"
@@ -507,21 +622,51 @@ export function App() {
           </mesh>
           <OrbitControls makeDefault />
           <Suspense fallback={null}>
-            {glbUrl && !loadError ? (
-              <GltfPlayer
-                url={glbUrl}
-                clipName={clip}
-                playing={playing && canPlay}
-                loop={loop}
-                scrub={scrub}
-                scrubbing={scrubbing}
-                onClips={setGltfClips}
-                onError={setLoadError}
-                onDuration={setDuration}
-              />
-            ) : loadError ? (
-              <LoadError message={loadError} />
-            ) : null}
+            {isScene
+              ? sceneNodes.map((n) => {
+                  const child = resolveChild(n.assetId);
+                  const childUrl = child
+                    ? `${API}/api/assets/${child.id}/file`
+                    : null;
+                  const clipForNode =
+                    n.defaultClip ||
+                    child?.clipUx?.defaultClip ||
+                    (child?.clips && child.clips[0]) ||
+                    undefined;
+                  if (!child || !child.formats?.glb) {
+                    return (
+                      <SceneNodeMissing
+                        key={n.id}
+                        transform={n.transform}
+                        label={n.assetId}
+                      />
+                    );
+                  }
+                  return (
+                    <SceneNodeModel
+                      key={n.id}
+                      url={childUrl!}
+                      clipName={clipForNode}
+                      transform={n.transform}
+                      highlighted={sceneNodeId === n.id}
+                    />
+                  );
+                })
+              : glbUrl && !loadError ? (
+                  <GltfPlayer
+                    url={glbUrl}
+                    clipName={clip}
+                    playing={playing && canPlay}
+                    loop={loop}
+                    scrub={scrub}
+                    scrubbing={scrubbing}
+                    onClips={setGltfClips}
+                    onError={setLoadError}
+                    onDuration={setDuration}
+                  />
+                ) : loadError ? (
+                  <LoadError message={loadError} />
+                ) : null}
           </Suspense>
         </Canvas>
         <div className="clip-bar">
@@ -717,23 +862,63 @@ export function App() {
               )}
           </div>
         )}
-        {selected?.stage === "scene" && selected.scene?.nodes && (
-          <div className="scene-stub-panel" aria-label="Scene stub">
+        {isScene && sceneNodes.length > 0 && (
+          <div className="scene-stub-panel" aria-label="Scene compose">
             <div className="import-meta-title">
-              Scene · {selected.scene.nodes.length} asset
-              {selected.scene.nodes.length === 1 ? "" : "s"}
+              Scene compose · v{selected?.scene?.version ?? 1} ·{" "}
+              {sceneNodes.length} node{sceneNodes.length === 1 ? "" : "s"}
+              {selected?.scene?.rootId
+                ? ` · root ${selected.scene.rootId}`
+                : ""}
             </div>
             <ul className="scene-node-list">
-              {selected.scene.nodes.map((n) => (
-                <li key={n.id}>
-                  <code>{n.id}</code>
-                  <span className="muted"> → </span>
-                  <code>{n.assetId}</code>
-                  {n.defaultClip ? (
-                    <span className="badge mode">{n.defaultClip}</span>
-                  ) : null}
-                </li>
-              ))}
+              {sceneNodes.map((n) => {
+                const child = resolveChild(n.assetId);
+                const isRoot =
+                  (selected?.scene?.rootId ?? sceneNodes[0]?.id) === n.id;
+                const pos = n.transform?.position;
+                const missing = !child || !child.formats?.glb;
+                return (
+                  <li key={n.id}>
+                    <button
+                      type="button"
+                      className={
+                        sceneNodeId === n.id
+                          ? "scene-node active"
+                          : "scene-node"
+                      }
+                      onClick={() => setSceneNodeId(n.id)}
+                    >
+                      {isRoot ? "★ " : ""}
+                      <code>{n.id}</code>
+                      <span className="muted"> → </span>
+                      <code>{child?.slug ?? n.assetId}</code>
+                      {child?.stage ? (
+                        <span className="badge stage">{child.stage}</span>
+                      ) : (
+                        <span className="badge off">unresolved</span>
+                      )}
+                      {n.defaultClip ? (
+                        <span className="badge mode">▶ {n.defaultClip}</span>
+                      ) : null}
+                      {missing ? (
+                        <span className="badge off" title="No GLB — no demo fallback">
+                          missing GLB
+                        </span>
+                      ) : null}
+                    </button>
+                    {sceneNodeId === n.id && (
+                      <div className="scene-node-xform muted">
+                        pos [{(pos ?? [0, 0, 0]).join(", ")}]
+                        {" · "}rot [
+                        {(n.transform?.rotation ?? [0, 0, 0]).join(", ")}]
+                        {" · "}scale [
+                        {(n.transform?.scale ?? [1, 1, 1]).join(", ")}]
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

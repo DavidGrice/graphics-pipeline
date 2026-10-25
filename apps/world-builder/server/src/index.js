@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
 import { safeParseAsset } from "@graphics-pipeline/asset-schema";
+import { validateSceneChildren } from "./sceneResolve.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -166,30 +167,11 @@ app.post("/api/assets", async (req, res) => {
       return null;
     };
 
-    // Scene stub: child assetIds must exist; no nested scenes; defaultClip ∈ child clips
+    // S2-F-E1: V4 hard register-time resolve (+ V5 nested, V6b defaultClip, V8 corrupt)
     if (body.stage === "scene" && body.scene?.nodes) {
-      for (const node of body.scene.nodes) {
-        const child = await resolveDoc(node.assetId);
-        if (!child) {
-          return res.status(400).json({
-            error: `scene node "${node.id}" references unknown assetId "${node.assetId}"`,
-          });
-        }
-        if (child.stage === "scene") {
-          return res.status(400).json({
-            error: `scene node "${node.id}" cannot reference nested stage=scene asset`,
-          });
-        }
-        if (
-          node.defaultClip &&
-          Array.isArray(child.clips) &&
-          child.clips.length > 0 &&
-          !child.clips.includes(node.defaultClip)
-        ) {
-          return res.status(400).json({
-            error: `scene node "${node.id}" defaultClip "${node.defaultClip}" not in child clips`,
-          });
-        }
+      const sceneErr = await validateSceneChildren(body.scene.nodes, resolveDoc);
+      if (sceneErr) {
+        return res.status(400).json({ error: sceneErr });
       }
     }
 
