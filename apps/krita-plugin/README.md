@@ -11,7 +11,7 @@ Optional header `X-Graphics-Token` must match `KRITA_FP_TOKEN` when set.
 
 ## Windows install (Krita Import Python Plugin)
 
-**Primary path:** import the zip **inside Krita** — do not hand-copy loose folders into `pykrita`.
+**Primary path:** import the zip **inside Krita** --- do not hand-copy loose folders into `pykrita`.
 
 ### 1) Build `graphics_fp_bridge.zip`
 
@@ -19,30 +19,33 @@ On branch `enhancement/s2b-firstparty-bridge`, from repo root in PowerShell:
 
 ```powershell
 .\apps\krita-plugin\pack.ps1
-# → apps\krita-plugin\graphics_fp_bridge.zip
+# -> apps\krita-plugin\graphics_fp_bridge.zip
 ```
 
-Fallback if `Compress-Archive` is unavailable:
+Fallback (committed base64 artifact):
 
 ```powershell
 .\apps\krita-plugin\unpack-b64.ps1
-# reads apps\krita-plugin\graphics_fp_bridge.zip.b64 → .zip
+# reads apps\krita-plugin\graphics_fp_bridge.zip.b64 -> .zip
 ```
 
-Zip root layout (what Krita’s importer expects):
+Zip root layout (what Krita's importer requires --- note the trailing `/` dir entry):
 
+- `graphics_fp_bridge/` (directory entry)
 - `graphics_fp_bridge/__init__.py`
 - `graphics_fp_bridge.desktop`
+
+Do **not** use `Compress-Archive` by hand; it writes backslash paths and Krita reports "no plugins found".
 
 In-repo artifacts: `graphics_fp_bridge.zip.b64`, `pack.ps1`, `unpack-b64.ps1`, `pack.sh`.
 
 ### 2) Import in Krita
 
 1. Open **Krita**.
-2. **Tools → Scripts → Import Python Plugin from File…** (wording may vary slightly by version; look for **Import Python Plugin**).
+2. **Tools -> Scripts -> Import Python Plugin from File...** (wording may vary slightly by version; look for **Import Python Plugin**).
 3. Select `apps\krita-plugin\graphics_fp_bridge.zip`.
 4. Confirm / restart Krita when prompted.
-5. **Settings → Configure Krita → Python Plugin Manager** → enable **Graphics FP Bridge** (if not already on).
+5. **Settings -> Configure Krita -> Python Plugin Manager** -> enable **Graphics FP Bridge** (if not already on).
 6. `$env:BRIDGE = 'firstparty'` for the MCP facade (vendor stays on **9797**).
 
 ### Optional fallback (manual unzip)
