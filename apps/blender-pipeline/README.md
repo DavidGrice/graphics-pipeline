@@ -1,19 +1,26 @@
 # blender-pipeline
 
-Headless PNG → GLB (mesh plane + Action `spin`). **No EEVEE.**
+Headless PNG → GLB. **No EEVEE.**
 
 | Item | Value |
 |------|-------|
 | Docs / CI pin | **Blender 5.2.3 LTS** |
 | Supported range | **≥ 4.2** (`bpy.app.version`) |
 | Binary | `BLENDER_BIN` env, else `blender` on PATH |
+| Mode | `--mode billboard` (default) or `--mode rigged` (`MODE` / `SMOKE_MODE`) |
 
 ```bash
 export BLENDER_BIN=/path/to/blender   # optional
 ./pipeline.sh /path/in.png /path/out.glb
 
+# billboard (default): mesh plane + Action `spin` (no armature)
+MODE=billboard ./pipeline.sh in.png out.glb
+
+# rigged: mesh + armature + vertex weights + Actions `idle` + `walk`
+MODE=rigged ./pipeline.sh in.png out-rigged.glb
+
 # equivalent — args AFTER --
-"${BLENDER_BIN:-blender}" --background --python png_to_glb.py -- in.png out.glb
+"${BLENDER_BIN:-blender}" --background --python png_to_glb.py -- in.png out.glb --mode rigged
 ```
 
 Version check:
@@ -22,7 +29,7 @@ Version check:
 "${BLENDER_BIN:-blender}" --background --python blender_version.py
 ```
 
-OBJ is **not** an animated output path (GLB only for clips/skins).
+OBJ is **not** an animated output path (GLB only for clips/skins). No Rigify / Mixamo.
 
 ## Orchestration
 
@@ -48,6 +55,8 @@ $env:SMOKE_LIVE = "1"
 ```
 
 Git Bash / WSL: `SMOKE_LIVE=1 ./apps/blender-pipeline/smoke_live.sh s2a-smoke`
+
+Optional S2-C: `$env:SMOKE_MODE = "rigged"` (or `billboard`) before smoke.
 
 Health is **red** if the Krita MCP bridge (`127.0.0.1:9797`) is down. CI stays on the non-live / demo path without Windows.
 
