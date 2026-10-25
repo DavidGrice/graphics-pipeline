@@ -110,13 +110,32 @@ test("vendor path still constructs (default BRIDGE)", async () => {
   }
 });
 
-test("plugin package files exist (GPL boundary)", async () => {
+test("plugin package files exist (GPL boundary + zip ship)", async () => {
   for (const rel of [
     "apps/krita-plugin/LICENSE",
     "apps/krita-plugin/graphics_fp_bridge.desktop",
     "apps/krita-plugin/graphics_fp_bridge/__init__.py",
     "apps/krita-plugin/README.md",
+    "apps/krita-plugin/graphics_fp_bridge.zip.b64",
+    "apps/krita-plugin/pack.sh",
+    "apps/krita-plugin/pack.ps1",
+    "apps/krita-plugin/unpack-b64.ps1",
   ]) {
     await fs.access(path.join(ROOT, rel));
   }
+  const { execSync, execFileSync } = await import("node:child_process");
+  execSync("bash apps/krita-plugin/pack.sh", { cwd: ROOT, stdio: "pipe" });
+  const zipPath = path.join(ROOT, "apps/krita-plugin/graphics_fp_bridge.zip");
+  await fs.access(zipPath);
+  const listing = execFileSync(
+    "python3",
+    [
+      "-c",
+      "import zipfile,sys; print(chr(10).join(zipfile.ZipFile(sys.argv[1]).namelist()))",
+      zipPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.match(listing, /graphics_fp_bridge\/__init__\.py/);
+  assert.match(listing, /graphics_fp_bridge\.desktop/);
 });

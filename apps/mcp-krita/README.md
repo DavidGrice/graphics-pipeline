@@ -10,7 +10,7 @@ Stable tool names for Grok Build / VS Code MCP hosts:
 ## Sprint 2-B: `BRIDGE=vendor|firstparty`
 
 - Default **`BRIDGE=vendor`** → loopback **9797** (krita-mcp).
-- **`BRIDGE=firstparty`** → **19876** (`KRITA_FP_PORT`) GPL plugin in `apps/krita-plugin/`.
+- **`BRIDGE=firstparty`** → **19876** (`KRITA_FP_PORT`) — install via `apps/krita-plugin/pack.ps1` → `graphics_fp_bridge.zip`, unzip into `%APPDATA%\krita\pykrita\` (not a loose folder copy).
 - Tool names stay `health` / `export_png`. Optional `KRITA_FP_TOKEN` / `X-Graphics-Token`.
 - No PR until firstparty Windows spike green.
 
