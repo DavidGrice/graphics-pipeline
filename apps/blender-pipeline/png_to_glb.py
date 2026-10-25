@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-png_to_glb.py — Sprint 1 MVP Blender headless pipeline
+png_to_glb.py — PNG → GLB headless pipeline (S2-C: --mode billboard|rigged)
 
 CI / docs pin: Blender 5.2.3 LTS. Scripts tolerate bpy.app.version >= (4, 2, 0).
 
 Usage:
-  blender --background --python png_to_glb.py -- <in.png> <out.glb>
+  blender --background --python png_to_glb.py -- <in.png> <out.glb> [--mode billboard|rigged]
+  # MODE / SMOKE_MODE env also accepted (default: billboard)
   # or via pipeline.sh / BLENDER_BIN
 
 No EEVEE / Cycles stills — geometry + materials + GLB export only.
@@ -14,11 +15,13 @@ No EEVEE / Cycles stills — geometry + materials + GLB export only.
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 
 MIN_VERSION = (4, 2, 0)
 PINNED_DOCS_VERSION = "5.2.3"  # CI / README pin (LTS)
+VALID_MODES = ("billboard", "rigged")
 
 
 def _require_bpy():
@@ -28,7 +31,8 @@ def _require_bpy():
         print(
             "ERROR: bpy is not available. Run with Blender (docs pin "
             f"{PINNED_DOCS_VERSION} LTS, supported range >= 4.2):\n"
-            "  blender --background --python png_to_glb.py -- <in.png> <out.glb>\n"
+            "  blender --background --python png_to_glb.py -- "
+            "<in.png> <out.glb> [--mode billboard|rigged]\n"
             "Or set BLENDER_BIN and use apps/blender-pipeline/pipeline.sh",
             file=sys.stderr,
         )
@@ -55,6 +59,46 @@ def _argv_after_double_dash(argv: list[str]) -> list[str]:
     if "--" in argv:
         return argv[argv.index("--") + 1 :]
     return argv[1:]
+
+
+def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path]:
+    """Parse --mode / MODE / SMOKE_MODE and positional in.png out.glb."""
+    mode = (
+        os.environ.get("SMOKE_MODE")
+        or os.environ.get("MODE")
+        or "billboard"
+    ).strip().lower()
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--mode" and i + 1 < len(args):
+            mode = args[i + 1].strip().lower()
+            i += 2
+            continue
+        if tok.startswith("--mode="):
+            mode = tok.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        positional.append(tok)
+        i += 1
+
+    if mode not in VALID_MODES:
+        print(
+            f"ERROR: invalid mode {mode!r}; expected billboard|rigged",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if len(positional) < 2:
+        print(
+            "Usage: blender --background --python png_to_glb.py -- "
+            "<in.png> <out.glb> [--mode billboard|rigged]",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return mode, Path(positional[0]).expanduser().resolve(), Path(
+        positional[1]
+    ).expanduser().resolve()
 
 
 def _call_op_tolerant(op, **kwargs):
@@ -107,7 +151,6 @@ def _mesh_is_exportable(obj) -> bool:
             data.update()
         except Exception:
             pass
-    # validate() returns True if the mesh had errors (and may repair some).
     try:
         had_errors = bool(data.validate(verbose=True, clean_customdata=True))
     except TypeError:
@@ -116,14 +159,12 @@ def _mesh_is_exportable(obj) -> bool:
         except Exception:
             had_errors = False
     if had_errors:
-        # One repair pass then re-check face count.
         try:
             data.validate(verbose=False, clean_customdata=True)
         except Exception:
             pass
     if len(data.polygons) < 1 or len(data.vertices) < 3:
         return False
-    # Reject NaN coordinates (common after bad armature weights).
     for v in data.vertices:
         co = v.co
         if not (math.isfinite(co.x) and math.isfinite(co.y) and math.isfinite(co.z)):
@@ -258,7 +299,6 @@ def _assign_action(bpy, obj, action) -> None:
         return
     except Exception:
         pass
-    # 5.0+ layered/slot API
     try:
         slot = action.slots.new(id_type="OBJECT", name="Object")
         ad.action = action
@@ -273,7 +313,7 @@ def _assign_action(bpy, obj, action) -> None:
 
 
 def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
-    """Trivial Y-axis spin 0→90° with ≥2 keyframes. Soft armature (no AUTO weights)."""
+    """Billboard: Y-axis spin 0→90° with ≥2 keyframes. No armature (contract)."""
     obj.rotation_mode = "XYZ"
     action = bpy.data.actions.new(name=action_name)
     _assign_action(bpy, obj, action)
@@ -283,41 +323,149 @@ def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
     obj.rotation_euler = (0.0, math.radians(90.0), 0.0)
     obj.keyframe_insert(data_path="rotation_euler", frame=40, index=1)
 
-    # ARMATURE_AUTO often corrupts thin planes (invalid mesh → empty GLB).
-    # Parent to a single bone without auto-weights; still marks armature present.
+
+def _ensure_pose_mode(bpy, arm) -> None:
+    bpy.ops.object.select_all(action="DESELECT")
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    if bpy.context.mode != "POSE":
+        bpy.ops.object.mode_set(mode="POSE")
+
+
+def _object_mode(bpy) -> None:
+    if bpy.context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _build_rigged_armature(bpy, mesh_obj):
+    """
+    Mesh + armature + real vertex weights (no Rigify/Mixamo).
+    Manual weights avoid ARMATURE_AUTO plane corruption on Blender 5.2.
+    """
+    _object_mode(bpy)
+    bpy.ops.object.select_all(action="DESELECT")
+    mesh_obj.select_set(True)
+    bpy.context.view_layer.objects.active = mesh_obj
+    loc = tuple(mesh_obj.location)
+
+    bpy.ops.object.armature_add(enter_editmode=True, location=loc)
+    arm = bpy.context.active_object
+    arm.name = "Armature"
+    arm_data = arm.data
+    arm_data.name = "ArmatureData"
+
+    # Two bones: root + tip (named for vertex groups)
+    edit_bones = arm_data.edit_bones
+    root = edit_bones[0]
+    root.name = "root"
+    root.head = (0.0, 0.0, 0.0)
+    root.tail = (0.0, 0.0, 0.6)
+    tip = edit_bones.new("tip")
+    tip.head = root.tail
+    tip.tail = (0.0, 0.0, 1.2)
+    tip.parent = root
+    tip.use_connect = True
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    # Parent with empty groups matching bone names, then paint weights manually.
+    bpy.ops.object.select_all(action="DESELECT")
+    mesh_obj.select_set(True)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
     try:
-        bpy.ops.object.select_all(action="DESELECT")
-        obj.select_set(True)
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.armature_add(enter_editmode=False, location=obj.location)
-        arm = bpy.context.active_object
-        arm.name = "Armature"
-        bpy.ops.object.select_all(action="DESELECT")
-        obj.select_set(True)
-        arm.select_set(True)
-        bpy.context.view_layer.objects.active = arm
-        bpy.ops.object.parent_set(type="OBJECT", keep_transform=True)
-        if not _mesh_is_exportable(obj):
-            print(
-                "WARN: mesh invalid after armature parent; clearing parent.",
-                file=sys.stderr,
-            )
-            bpy.ops.object.select_all(action="DESELECT")
-            obj.select_set(True)
-            bpy.context.view_layer.objects.active = obj
-            bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
-            bpy.data.objects.remove(arm, do_unlink=True)
-    except Exception as rig_err:
-        print(
-            f"WARN: optional armature skipped: {rig_err}",
-            file=sys.stderr,
-        )
+        bpy.ops.object.parent_set(type="ARMATURE_NAME", keep_transform=True)
+    except TypeError:
+        bpy.ops.object.parent_set(type="ARMATURE_NAME")
+
+    # Ensure vertex groups exist and assign weights.
+    mesh = mesh_obj.data
+    vg_root = mesh_obj.vertex_groups.get("root") or mesh_obj.vertex_groups.new(name="root")
+    vg_tip = mesh_obj.vertex_groups.get("tip") or mesh_obj.vertex_groups.new(name="tip")
+
+    # Split by local Z: lower half → root, upper → tip (plane in XY → use Y).
+    for v in mesh.vertices:
+        # Plane is XY; use Y as "height" for billboard-like split.
+        if v.co.y >= 0.0:
+            vg_tip.add([v.index], 1.0, "REPLACE")
+            vg_root.add([v.index], 0.0, "REPLACE")
+        else:
+            vg_root.add([v.index], 1.0, "REPLACE")
+            vg_tip.add([v.index], 0.0, "REPLACE")
+
+    # Armature modifier if parent_set did not add one.
+    has_arm_mod = any(m.type == "ARMATURE" for m in mesh_obj.modifiers)
+    if not has_arm_mod:
+        mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
+        mod.object = arm
+
+    if not _mesh_is_exportable(mesh_obj):
+        raise RuntimeError("mesh invalid after rig/weights")
+
+    if not mesh_obj.vertex_groups:
+        raise RuntimeError("rigged mode requires vertex groups (weights)")
+
+    print(
+        f"OK: armature={arm.name} bones=root,tip "
+        f"vgroups={len(mesh_obj.vertex_groups)}"
+    )
+    return arm
+
+
+def _keyframe_bone(pbone, frame: int, *, loc=None, rot=None) -> None:
+    if loc is not None:
+        pbone.location = loc
+        pbone.keyframe_insert(data_path="location", frame=frame)
+    if rot is not None:
+        pbone.rotation_mode = "XYZ"
+        pbone.rotation_euler = rot
+        pbone.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+
+def _add_idle_walk_actions(bpy, arm) -> None:
+    """≥2 Actions named exactly idle and walk on the armature."""
+    _ensure_pose_mode(bpy, arm)
+    pb_root = arm.pose.bones.get("root")
+    pb_tip = arm.pose.bones.get("tip")
+    if pb_root is None or pb_tip is None:
+        raise RuntimeError("expected pose bones root and tip")
+
+    # --- idle: gentle tip sway ---
+    idle = bpy.data.actions.new(name="idle")
+    _assign_action(bpy, arm, idle)
+    _keyframe_bone(pb_tip, 1, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 1, rot=(0.0, 0.0, 0.0), loc=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 20, rot=(0.0, math.radians(8.0), 0.0))
+    _keyframe_bone(pb_tip, 40, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 40, rot=(0.0, 0.0, 0.0), loc=(0.0, 0.0, 0.0))
+
+    # Clear pose before next action so channels don't bleed oddly.
+    for pb in (pb_root, pb_tip):
+        pb.location = (0.0, 0.0, 0.0)
+        pb.rotation_euler = (0.0, 0.0, 0.0)
+
+    # --- walk: root bob + tip lean ---
+    walk = bpy.data.actions.new(name="walk")
+    _assign_action(bpy, arm, walk)
+    _keyframe_bone(pb_root, 1, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 1, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 10, loc=(0.0, 0.0, 0.08), rot=(0.0, 0.0, math.radians(6.0)))
+    _keyframe_bone(pb_tip, 10, rot=(math.radians(12.0), 0.0, 0.0))
+    _keyframe_bone(pb_root, 20, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 20, rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_root, 30, loc=(0.0, 0.0, 0.08), rot=(0.0, 0.0, math.radians(-6.0)))
+    _keyframe_bone(pb_tip, 30, rot=(math.radians(-12.0), 0.0, 0.0))
+    _keyframe_bone(pb_root, 40, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0))
+    _keyframe_bone(pb_tip, 40, rot=(0.0, 0.0, 0.0))
+
+    # Leave walk as active (both Actions exist in bpy.data.actions for export).
+    _object_mode(bpy)
+    print("OK: Actions idle + walk on armature")
 
 
 def _export_glb(bpy, out_path: Path) -> None:
     """Atomic write via sibling *.tmp.glb (must end in .glb for the exporter)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Important: extension must be .glb — model.glb.tmp yields empty/partial files.
     tmp_path = out_path.with_name(out_path.stem + ".tmp.glb")
     if tmp_path.exists():
         tmp_path.unlink()
@@ -326,7 +474,6 @@ def _export_glb(bpy, out_path: Path) -> None:
         print("ERROR: export_scene.gltf missing on this Blender build.", file=sys.stderr)
         raise SystemExit(4)
 
-    # Ensure every mesh object is exportable before calling the exporter.
     for obj in bpy.context.scene.objects:
         if obj.type == "MESH" and not _mesh_is_exportable(obj):
             print(
@@ -358,7 +505,6 @@ def _export_glb(bpy, out_path: Path) -> None:
             except Exception as exc2:
                 print(f"ERROR: GLB export failed: {exc} / {exc2}", file=sys.stderr)
                 raise SystemExit(4) from exc2
-        # Operators return {'FINISHED'} / {'CANCELLED'} set
         if result is not None and "FINISHED" not in result and "CANCELLED" in result:
             print(f"ERROR: GLB export cancelled: {result}", file=sys.stderr)
             raise SystemExit(4)
@@ -368,7 +514,6 @@ def _export_glb(bpy, out_path: Path) -> None:
                 file=sys.stderr,
             )
             raise SystemExit(4)
-        # Minimal GLB magic check
         with tmp_path.open("rb") as fh:
             magic = fh.read(4)
         if magic != b"glTF":
@@ -398,28 +543,29 @@ def main() -> None:
         raise SystemExit(2)
 
     args = _argv_after_double_dash(sys.argv)
-    if len(args) < 2:
-        print(
-            "Usage: blender --background --python png_to_glb.py -- <in.png> <out.glb>",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    in_png = Path(args[0]).expanduser().resolve()
-    out_glb = Path(args[1]).expanduser().resolve()
+    mode, in_png, out_glb = _parse_mode_and_paths(args)
 
     if not in_png.is_file():
         print(f"ERROR: input PNG not found: {in_png}", file=sys.stderr)
         raise SystemExit(1)
 
+    print(f"mode={mode}")
     _clear_scene(bpy)
     plane = _import_mesh_plane(bpy, in_png)
-    _add_spin_action(bpy, plane, action_name="spin")
+
+    if mode == "billboard":
+        _add_spin_action(bpy, plane, action_name="spin")
+        action_note = "Action=spin"
+    else:
+        arm = _build_rigged_armature(bpy, plane)
+        _add_idle_walk_actions(bpy, arm)
+        action_note = "Actions=idle,walk armature=yes weights=yes"
+
     if not _mesh_is_exportable(plane):
         print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)
         raise SystemExit(4)
     _export_glb(bpy, out_glb)
-    print(f"OK: wrote {out_glb} (Action=spin)")
+    print(f"OK: wrote {out_glb} mode={mode} ({action_note})")
 
 
 if __name__ == "__main__":

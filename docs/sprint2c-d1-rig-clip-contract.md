@@ -3,7 +3,7 @@
 **Role:** Graphics_Bot_Designer  
 **Lane:** Design (C1 naming + C2 schema)  
 **Brief:** `docs/sprint2c-brief.md` · Companion: `docs/sprint2c-d2-pipeline-v2.md` · Base: `docs/sprint1-asset-contract.md`  
-**Status:** Leader-cut LOCK — S2-C-D1  
+**Status:** Leader-cut LOCK — S2-C-D1 · **R1 bound** (`sprint2c-brief.md`)  
 **Cut:** `/workspace/sprint2c-cut.md` · **Base:** `origin/dev` @ `f748e35`  
 **Branch target:** fold onto `enhancement/s2c-rigged-glb` (or Engineer tip)
 
@@ -27,7 +27,7 @@
 | Field | `mvp-billboard` | `rigged` |
 |-------|-----------------|----------|
 | `stage` | `mvp-billboard` | **`rigged`** |
-| `characterType` | `billboard` \| `prop` | same or `prop`; `humanoid` only if honest later |
+| `characterType` | prefer `billboard` | prefer **`prop`** (R1); `humanoid` only if honest |
 | `clips` | e.g. `["spin"]` | `["idle","walk",…]` |
 | `rig.hasArmature` | false (typical) | **true** |
 | `rig.hasWeights` | false | **true** |
@@ -80,3 +80,6 @@ After `png_to_glb --mode=rigged`, register probe sets `stage`, `clips` from GLB 
 | T1.3 | OBJ+clips hard-fail invariant |
 | T1.5 | §3 register metadata |
 | T1.6 | this file |
+
+
+**R1 bind (2026-10-25):** mode→stage map + `characterType` prefer `prop` for `rigged`; probe GLB for clips/rig; reject dishonest `rigged`; BRIDGE untouched.

@@ -36,6 +36,7 @@ test("T2: animated asset with GLB + clips passes", () => {
 });
 
 test("T2: animated asset with FBX-only + clips passes", () => {
+  // S2-C: mvp-billboard must not claim armature/weights (R1). FBX+clips still OK.
   const r = safeParseAsset({
     ...base,
     clips: ["spin"],
@@ -43,9 +44,49 @@ test("T2: animated asset with FBX-only + clips passes", () => {
       fbx: `assets/${base.id}/model.fbx`,
       preview: previewPathFor(base.id),
     },
-    rig: { hasArmature: true, hasWeights: true },
+    rig: { hasArmature: false, hasWeights: false },
   });
   assert.equal(r.success, true);
+});
+
+test("T2: mvp-billboard claiming armature/weights fails (S2-C)", () => {
+  const r = safeParseAsset({
+    ...base,
+    clips: ["spin"],
+    formats: {
+      glb: glbPathFor(base.id),
+      preview: previewPathFor(base.id),
+    },
+    rig: { hasArmature: true, hasWeights: true },
+  });
+  assert.equal(r.success, false);
+});
+
+test("T2: stage rigged requires idle+walk+armature+weights+glb", () => {
+  const bad = safeParseAsset({
+    ...base,
+    characterType: "prop",
+    stage: "rigged",
+    clips: ["spin"],
+    formats: {
+      glb: glbPathFor(base.id),
+      preview: previewPathFor(base.id),
+    },
+    rig: { hasArmature: true, hasWeights: true },
+  });
+  assert.equal(bad.success, false);
+  const good = safeParseAsset({
+    ...base,
+    characterType: "prop",
+    stage: "rigged",
+    clips: ["idle", "walk"],
+    formats: {
+      glb: glbPathFor(base.id),
+      preview: previewPathFor(base.id),
+    },
+    rig: { hasArmature: true, hasWeights: true },
+  });
+  assert.equal(good.success, true);
 });
 
 test("T2: clips without glb and fbx hard-fails", () => {
