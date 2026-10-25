@@ -1,4 +1,4 @@
-# Decode committed graphics_fp_bridge.zip.b64 → graphics_fp_bridge.zip
+# Decode committed graphics_fp_bridge.zip.b64 -> graphics_fp_bridge.zip
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $B64 = Join-Path $Root "graphics_fp_bridge.zip.b64"
