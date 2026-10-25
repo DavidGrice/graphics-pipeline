@@ -4,7 +4,7 @@
 **Lane:** Design → Engineer E2 · Tester T1.2/T1.3/T1.6  
 **Brief:** `/workspace/sprint2g-brief.md` (**R1 bound**) · Companion: `docs/sprint2g-d2-jump-allowlist.md`  
 **Status:** Bound to R1  
-**Cut:** `/workspace/sprint2g-cut.md` · **Base:** `origin/dev` @ `c16d72c` · Branch: `enhancement/s2g-docs`
+**Cut:** `/workspace/sprint2g-cut.md` · **Base:** `origin/dev` @ `c16d72c` · Branch: `enhancement/s2g-scene-author-jump`
 
 ---
 
@@ -88,4 +88,4 @@ Show child stage + available clips after resolve so defaultClip dropdown is hone
 | T1.3 | §1 authoring |
 | T1.6 | this file |
 
-**Locks:** room-only · Engineer opens PR after FULL PASS · BRIDGE unchanged.
+**Locks:** room-only · Tester opens PR after FULL PASS · BRIDGE unchanged.
