@@ -14,3 +14,4 @@ Coding agents (Claude, Grok, Cursor, Copilot, …): **start here**. Do not inven
 **Hard rules:** GLB (or FBX) for anim/rig · OBJ static-only · patch/minor Dependabot → `dev` only · topic branches `feature|bug|enhancement/*` → `dev` → `test` → `main` · CI job name **`build-test`**.
 
 Repo: https://github.com/DavidGrice/graphics-pipeline
+- OpenAPI stub: docs/openapi.yaml (S3-B #74)
