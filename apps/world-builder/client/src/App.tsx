@@ -413,6 +413,39 @@ function MeshStatsReporter({
   return null;
 }
 
+
+/** Normalize scene graph for dirty-diff (#23). */
+function normalizeSceneSnapshot(
+  nodes: Array<{
+    id: string;
+    assetId: string;
+    defaultClip?: string;
+    visible?: boolean;
+    transform?: {
+      position?: [number, number, number];
+      rotation?: [number, number, number];
+      scale?: [number, number, number];
+    };
+  }>,
+  rootId?: string,
+): string {
+  const normNodes = nodes.map((n) => ({
+    id: n.id,
+    assetId: n.assetId,
+    defaultClip: n.defaultClip || undefined,
+    visible: n.visible !== false,
+    transform: {
+      position: (n.transform?.position ?? [0, 0, 0]) as [number, number, number],
+      rotation: (n.transform?.rotation ?? [0, 0, 0]) as [number, number, number],
+      scale: (n.transform?.scale ?? [1, 1, 1]) as [number, number, number],
+    },
+  }));
+  return JSON.stringify({
+    rootId: rootId ?? normNodes[0]?.id,
+    nodes: normNodes,
+  });
+}
+
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
@@ -708,19 +741,12 @@ export function App() {
           })),
         },
       };
-      // Prefer PATCH scene (#23); fall back to full POST register.
-      let r = await fetch(`${API}/api/assets/${selected.id}`, {
+      // PATCH only (#23 R1 nit): 4xx must surface — never silent POST fallback.
+      const r = await fetch(`${API}/api/assets/${selected.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scene: body.scene }),
       });
-      if (!r.ok) {
-        r = await fetch(`${API}/api/assets`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      }
       const textBody = await r.text();
       if (!r.ok) throw new Error(`${r.status} ${textBody}`);
       const updated = JSON.parse(textBody) as AssetMeta;
@@ -833,6 +859,25 @@ export function App() {
       /* fullscreen blocked — ignore */
     }
   }, []);
+
+
+
+  const sceneDirty = useMemo(() => {
+    if (!isScene || !selected) return false;
+    const saved = selected.scene?.nodes ?? [];
+    const draftSnap = normalizeSceneSnapshot(sceneDraft, sceneRootId);
+    const savedSnap = normalizeSceneSnapshot(
+      saved.map((n) => ({
+        id: n.id,
+        assetId: n.assetId,
+        defaultClip: n.defaultClip,
+        visible: n.visible,
+        transform: n.transform,
+      })),
+      selected.scene?.rootId,
+    );
+    return draftSnap !== savedSnap;
+  }, [isScene, selected, sceneDraft, sceneRootId]);
 
   return (
     <div className="layout">
@@ -1254,6 +1299,17 @@ export function App() {
               Scene author · v{selected?.scene?.version ?? 1} ·{" "}
               {sceneDraft.length} node{sceneDraft.length === 1 ? "" : "s"}
               {sceneRootId ? ` · root ${sceneRootId}` : ""}
+              {sceneDirty ? (
+                <span className="badge off" title="Draft differs from last saved scene.nodes">
+                  {" "}
+                  Unsaved
+                </span>
+              ) : (
+                <span className="badge on" title="Draft matches last saved">
+                  {" "}
+                  Saved
+                </span>
+              )}
             </div>
             <div className="scene-author-actions">
               <button type="button" className="tiny" onClick={addSceneNode}>
@@ -1262,10 +1318,10 @@ export function App() {
               <button
                 type="button"
                 className="tiny primary"
-                disabled={sceneSaving || sceneDraft.length < 1}
+                disabled={sceneSaving || sceneDraft.length < 1 || !sceneDirty}
                 onClick={() => void persistScene()}
               >
-                {sceneSaving ? "Saving…" : "Save / Register"}
+                {sceneSaving ? "Saving…" : sceneDirty ? "Save" : "Saved"}
               </button>
             </div>
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}

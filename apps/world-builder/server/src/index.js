@@ -18,6 +18,24 @@ const VALID_STAGES = new Set(["mvp-billboard", "rigged", "scene"]);
 const ASSET_SCHEMA_VERSION = 3;
 
 /**
+ * Normalize Express query value to string[] (repeat params → AND).
+ * Non-strings are dropped (never coerced to "" which would drop the filter).
+ */
+function queryStringList(raw) {
+  if (raw == null) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  /** @type {string[]} */
+  const out = [];
+  for (const v of arr) {
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+
+/**
  * Probe BLENDER_BIN / KRITA_BIN (or box defaults) for version strings.
  * Missing binaries → null fields; never fails the health route.
  */
@@ -148,6 +166,7 @@ app.get("/api/health", async (_req, res) => {
     blender: tools.blender?.version ?? null,
     dataRoot: DATA_ROOT,
     strictKrita: strict,
+    ...(bridgeMode === "mock" ? { bridge: "mock" } : {}),
   });
 });
 
@@ -159,19 +178,18 @@ app.get("/api/assets", async (req, res) => {
       return res.status(503).json({ error: "Mongo required but unavailable" });
     }
 
-    const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
-    const stage = typeof req.query.stage === "string" ? req.query.stage.trim() : "";
-    const characterType =
-      typeof req.query.characterType === "string"
-        ? req.query.characterType.trim()
-        : "";
-    const clip = typeof req.query.clip === "string" ? req.query.clip.trim() : "";
-    const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
+    const qList = queryStringList(req.query.q).map((s) => s.toLowerCase());
+    const stageList = queryStringList(req.query.stage);
+    const characterTypeList = queryStringList(req.query.characterType);
+    const clipList = queryStringList(req.query.clip);
+    const tagList = queryStringList(req.query.tag);
 
-    if (stage && !VALID_STAGES.has(stage)) {
-      return res.status(400).json({
-        error: `unknown stage "${stage}" (expected mvp-billboard|rigged|scene)`,
-      });
+    for (const stage of stageList) {
+      if (!VALID_STAGES.has(stage)) {
+        return res.status(400).json({
+          error: `unknown stage "${stage}" (expected mvp-billboard|rigged|scene)`,
+        });
+      }
     }
 
     const all = col
@@ -179,20 +197,31 @@ app.get("/api/assets", async (req, res) => {
       : [...memoryAssets.values()];
 
     const filtered = all.filter((doc) => {
-      if (stage && doc.stage !== stage) return false;
-      if (characterType && doc.characterType !== characterType) return false;
-      if (clip) {
+      // AND across all provided filter values (repeat params included)
+      for (const stage of stageList) {
+        if (doc.stage !== stage) return false;
+      }
+      for (const characterType of characterTypeList) {
+        if (doc.characterType !== characterType) return false;
+      }
+      if (clipList.length) {
         const clips = Array.isArray(doc.clips) ? doc.clips : [];
-        if (!clips.includes(clip)) return false;
+        for (const clip of clipList) {
+          if (!clips.includes(clip)) return false;
+        }
       }
-      if (tag) {
+      if (tagList.length) {
         const tags = Array.isArray(doc.tags) ? doc.tags : [];
-        if (!tags.includes(tag)) return false;
+        for (const tag of tagList) {
+          if (!tags.includes(tag)) return false;
+        }
       }
-      if (q) {
+      if (qList.length) {
         const name = String(doc.name || "").toLowerCase();
         const slug = String(doc.slug || "").toLowerCase();
-        if (!name.includes(q) && !slug.includes(q)) return false;
+        for (const q of qList) {
+          if (!name.includes(q) && !slug.includes(q)) return false;
+        }
       }
       return true;
     });
