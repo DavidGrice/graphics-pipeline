@@ -28,7 +28,7 @@ Suggested defaults (optional UX): `idle|walk|run|jump` → locomotion; `wave` �
 
 ## 2. Humanoid bone gate (#13) — UI note
 
-When `characterType=humanoid`, register/schema requires `rig.boneCount >= 8` (probe preferred). Prop ~2-bone → reject. Show bone count in stats (#83) when available.
+When `characterType=humanoid`, register/schema requires `rig.boneCount >= 8` **unique joints** (probe preferred). Prop ~2-bone → reject. Show bone count in stats (#83) when available.
 
 ```ts
 rig: { hasArmature: boolean; hasWeights: boolean; boneCount?: number; … }
@@ -55,7 +55,7 @@ Forbidden via PATCH alone: GLB bytes, forging `clips`/`rig`/`stage` vs probe
 | tag | metadata tags includes |
 | q | name/slug substring |
 
-Unknown stage → 400.
+Multiple params combine with **AND**; repeat `clip=` must include all. Unknown stage → 400.
 
 ### Schema version (#75)
 
@@ -85,7 +85,7 @@ Unknown stage → 400.
 
 | ID | Wire |
 |----|------|
-| #50 | `BRIDGE=mock` health OK without Krita; export fixture/skip; don’t break vendor\|firstparty |
+| #50 | `BRIDGE=mock` → health `bridge:"mock"` OK without Krita; export fixture/skip; **no tracked `data/**`**; don’t break vendor\|firstparty |
 | #103 | health `tools.blender|krita` path+version; box SoT `/home/box/tools/{blender,krita}` |
 
 ---

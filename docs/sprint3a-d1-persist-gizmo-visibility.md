@@ -43,7 +43,7 @@ nodes[].visible?: boolean  // default true; false = hide, not delete
 | Gizmo scope | **Translate only** on selected; rotate/scale = out (#25 later) |
 | No selection / hidden | gizmo **disabled** |
 | Hidden nodes | still in graph · count for V1 · still V4 resolve |
-| Save honesty | error surfaces; **no** “saved” if local-only drift |
+| Save honesty | success = **HTTP 2xx** + returned `scene.nodes` mirrors viewport; **4xx** on V4–V8/V4a (names bad `assetId`); dirty draft shows unsaved until 2xx; **no** local-only “saved” |
 | Ids | unchanged nodes keep ids; no silent reorder |
 
 ---
