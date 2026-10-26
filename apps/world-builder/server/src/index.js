@@ -10,6 +10,50 @@ import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
 import { safeParseAsset } from "@graphics-pipeline/asset-schema";
 import { validateSceneChildren } from "./sceneResolve.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+const VALID_STAGES = new Set(["mvp-billboard", "rigged", "scene"]);
+const ASSET_SCHEMA_VERSION = 3;
+
+/**
+ * Probe BLENDER_BIN / KRITA_BIN (or box defaults) for version strings.
+ * Missing binaries → null fields; never fails the health route.
+ */
+async function probeToolVersions() {
+  const blenderBin =
+    process.env.BLENDER_BIN ||
+    (process.platform === "linux" ? "/home/box/tools/blender" : undefined);
+  const kritaBin =
+    process.env.KRITA_BIN ||
+    (process.platform === "linux" ? "/home/box/tools/krita" : undefined);
+
+  /** @type {{ blender: { path?: string, version?: string } | null, krita: { path?: string, version?: string } | null }} */
+  const tools = { blender: null, krita: null };
+
+  async function versionOf(bin) {
+    if (!bin || !fs.existsSync(bin)) return null;
+    try {
+      const { stdout, stderr } = await execFileAsync(bin, ["--version"], {
+        timeout: 4000,
+        env: process.env,
+      });
+      const out = `${stdout || ""}\n${stderr || ""}`;
+      const m = out.match(/(\d+\.\d+(?:\.\d+)?[^\n]*)/);
+      return {
+        path: bin,
+        version: m ? m[1].trim() : out.trim().split("\n")[0] || "unknown",
+      };
+    } catch {
+      return { path: bin, version: undefined };
+    }
+  }
+
+  tools.blender = await versionOf(blenderBin);
+  tools.krita = await versionOf(kritaBin);
+  return tools;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../");
@@ -55,9 +99,11 @@ app.get("/api/health", async (_req, res) => {
   let krita = { ok: false, status: "unchecked" };
   const strict =
     process.env.HEALTH_STRICT_KRITA === "1" || process.env.SMOKE_LIVE === "1";
+  const bridgeMode = (process.env.BRIDGE || "").toLowerCase();
   const skip =
     process.env.KRITA_HEALTH_MODE === "off" ||
-    process.env.SKIP_KRITA_HEALTH === "1";
+    process.env.SKIP_KRITA_HEALTH === "1" ||
+    bridgeMode === "mock";
   if (!skip) {
     try {
       const port = Number(process.env.KRITA_MCP_PORT || 9797);
@@ -83,31 +129,75 @@ app.get("/api/health", async (_req, res) => {
       };
     }
   } else {
-    krita = { ok: true, status: "skipped" };
+    krita = {
+      ok: true,
+      status: bridgeMode === "mock" ? "mock" : "skipped",
+    };
   }
+
+  // S3-A #103 — tool version badge (null when missing; API still ok)
+  const tools = await probeToolVersions();
+
   const ok = strict ? krita.ok : true;
   const status = ok ? 200 : 503;
   res.status(status).json({
     ok,
     mongo: Boolean(db),
     krita,
+    tools,
+    blender: tools.blender?.version ?? null,
     dataRoot: DATA_ROOT,
     strictKrita: strict,
   });
 });
 
-app.get("/api/assets", async (_req, res) => {
+app.get("/api/assets", async (req, res) => {
   try {
     const col = collection();
     res.setHeader("X-Store", col ? "mongo" : "memory");
     if (process.env.MONGO_REQUIRED === "1" && !col) {
       return res.status(503).json({ error: "Mongo required but unavailable" });
     }
-    if (col) {
-      const docs = await col.find({}).toArray();
-      return res.json(docs);
+
+    const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    const stage = typeof req.query.stage === "string" ? req.query.stage.trim() : "";
+    const characterType =
+      typeof req.query.characterType === "string"
+        ? req.query.characterType.trim()
+        : "";
+    const clip = typeof req.query.clip === "string" ? req.query.clip.trim() : "";
+    const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : "";
+
+    if (stage && !VALID_STAGES.has(stage)) {
+      return res.status(400).json({
+        error: `unknown stage "${stage}" (expected mvp-billboard|rigged|scene)`,
+      });
     }
-    return res.json([...memoryAssets.values()]);
+
+    const all = col
+      ? await col.find({}).toArray()
+      : [...memoryAssets.values()];
+
+    const filtered = all.filter((doc) => {
+      if (stage && doc.stage !== stage) return false;
+      if (characterType && doc.characterType !== characterType) return false;
+      if (clip) {
+        const clips = Array.isArray(doc.clips) ? doc.clips : [];
+        if (!clips.includes(clip)) return false;
+      }
+      if (tag) {
+        const tags = Array.isArray(doc.tags) ? doc.tags : [];
+        if (!tags.includes(tag)) return false;
+      }
+      if (q) {
+        const name = String(doc.name || "").toLowerCase();
+        const slug = String(doc.slug || "").toLowerCase();
+        if (!name.includes(q) && !slug.includes(q)) return false;
+      }
+      return true;
+    });
+
+    return res.json(filtered);
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -192,6 +282,9 @@ app.post("/api/assets", async (req, res) => {
       }
     }
 
+    if (body.assetSchemaVersion == null) {
+      body.assetSchemaVersion = ASSET_SCHEMA_VERSION;
+    }
     if (col) {
       await col.updateOne({ id: body.id }, { $set: body }, { upsert: true });
     } else {
@@ -203,6 +296,119 @@ app.post("/api/assets", async (req, res) => {
   }
 });
 
+
+
+app.patch("/api/assets/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const body = req.body ?? {};
+    const col = collection();
+    const existing = col
+      ? await col.findOne({ id })
+      : memoryAssets.get(id) ?? null;
+    if (!existing) return res.status(404).json({ error: "not found" });
+
+    for (const forbidden of ["formats", "clips", "rig", "stage", "id", "slug"]) {
+      if (Object.prototype.hasOwnProperty.call(body, forbidden)) {
+        return res.status(400).json({
+          error: `PATCH cannot modify "${forbidden}" (use register/probe paths)`,
+        });
+      }
+    }
+
+    /** @type {Record<string, unknown>} */
+    const patch = {};
+    if (typeof body.name === "string" && body.name.trim()) {
+      patch.name = body.name.trim();
+    }
+    if (Array.isArray(body.tags)) {
+      patch.tags = body.tags.filter((x) => typeof x === "string");
+    }
+    if (body.clipTags !== undefined) {
+      patch.clipTags = body.clipTags;
+    }
+    if (typeof body.characterType === "string") {
+      patch.characterType = body.characterType;
+    }
+    if (body.clipUx !== undefined) {
+      patch.clipUx = body.clipUx;
+    }
+    if (body.scene !== undefined) {
+      patch.scene = body.scene;
+    }
+
+    const prevVer =
+      typeof existing.assetSchemaVersion === "number"
+        ? existing.assetSchemaVersion
+        : 1;
+    if (body.assetSchemaVersion != null) {
+      const nextVer = Number(body.assetSchemaVersion);
+      if (!Number.isFinite(nextVer) || nextVer < prevVer) {
+        return res.status(400).json({
+          error: "assetSchemaVersion cannot decrement",
+        });
+      }
+      patch.assetSchemaVersion = nextVer;
+    } else if (existing.assetSchemaVersion == null) {
+      patch.assetSchemaVersion = ASSET_SCHEMA_VERSION;
+    }
+
+    const next = {
+      ...existing,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const parsed = safeParseAsset(next);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((i) => i.message).join("; ");
+      return res.status(400).json({ error: msg, issues: parsed.error.issues });
+    }
+
+    if (next.stage === "scene" && next.scene?.nodes) {
+      const resolveDoc = async (idOrSlug) => {
+        if (col) {
+          return (
+            (await col.findOne({ id: idOrSlug })) ||
+            (await col.findOne({ slug: idOrSlug }))
+          );
+        }
+        for (const doc of memoryAssets.values()) {
+          if (doc.id === idOrSlug || doc.slug === idOrSlug) return doc;
+        }
+        return null;
+      };
+      const resolveAll = async (idOrSlug) => {
+        if (col) {
+          const byId = await col.find({ id: idOrSlug }).toArray();
+          if (byId.length) return byId;
+          return await col.find({ slug: idOrSlug }).toArray();
+        }
+        const out = [];
+        for (const doc of memoryAssets.values()) {
+          if (doc.id === idOrSlug || doc.slug === idOrSlug) out.push(doc);
+        }
+        return out;
+      };
+      const sceneErr = await validateSceneChildren(next.scene.nodes, resolveDoc, {
+        resolveAll,
+        normalize: true,
+      });
+      if (sceneErr) {
+        return res.status(400).json({ error: sceneErr });
+      }
+    }
+
+    if (col) {
+      await col.updateOne({ id }, { $set: next });
+    } else {
+      memoryAssets.set(id, next);
+    }
+    res.json(next);
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
 
 app.patch("/api/assets/:id/clip-ux", async (req, res) => {
   try {
