@@ -3,7 +3,7 @@
  * Compose stage=scene children by transform + defaultClip; author CRUD; no demo fallback.
  */
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Grid, useGLTF } from "@react-three/drei";
+import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
@@ -17,6 +17,7 @@ type SceneNodeDraft = {
   id: string;
   assetId: string;
   defaultClip?: string;
+  visible?: boolean;
   transform?: {
     position?: [number, number, number];
     rotation?: [number, number, number];
@@ -41,16 +42,19 @@ type AssetMeta = {
   clipUx?: ClipUx;
   importMeta?: ImportMetaView;
   formats?: { glb?: string; obj?: string; preview?: string };
-  rig?: { hasArmature?: boolean; hasWeights?: boolean };
+  rig?: { hasArmature?: boolean; hasWeights?: boolean; boneCount?: number };
   characterType?: string;
   stage?: string;
   tags?: string[];
+  clipTags?: Record<string, Array<"locomotion" | "emote" | "combat">>;
+  assetSchemaVersion?: number;
   scene?: {
     version?: number;
     nodes?: Array<{
       id: string;
       assetId: string;
       defaultClip?: string;
+      visible?: boolean;
       transform?: {
         position?: [number, number, number];
         rotation?: [number, number, number];
@@ -235,16 +239,32 @@ function GltfPlayer({
     return () => cancelAnimationFrame(frame);
   }, [scrubbing]);
 
-  return <primitive object={clone} />;
+  return (
+    <>
+      <primitive object={clone} />
+      <MeshStatsReporter
+        object={clone}
+        onStats={(s) => {
+          /* bubbled via custom event on window for App to pick up cheaply */
+          window.dispatchEvent(
+            new CustomEvent("gp-mesh-stats", { detail: s }),
+          );
+        }}
+      />
+    </>
+  );
 }
 
 
-/** S2-F-E2 — place one scene child GLB by transform; play defaultClip when set. */
+/** S2-F-E2 / S3-A — scene child + translate gizmo (#24) + visibility (#33). */
 function SceneNodeModel({
   url,
   clipName,
   transform,
   highlighted,
+  selected,
+  visible = true,
+  onTransformCommit,
 }: {
   url: string;
   clipName?: string;
@@ -254,13 +274,18 @@ function SceneNodeModel({
     scale?: [number, number, number];
   };
   highlighted?: boolean;
+  selected?: boolean;
+  visible?: boolean;
+  onTransformCommit?: (pos: [number, number, number]) => void;
 }) {
   const { scene, animations } = useGLTF(url);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
+  const [groupObj, setGroupObj] = useState<THREE.Group | null>(null);
   const clone = useMemo(() => scene.clone(true), [scene]);
   const pos = transform?.position ?? ([0, 0, 0] as [number, number, number]);
   const rot = transform?.rotation ?? ([0, 0, 0] as [number, number, number]);
   const scl = transform?.scale ?? ([1, 1, 1] as [number, number, number]);
+  const showGizmo = Boolean(selected && visible !== false);
 
   useEffect(() => {
     const m = new THREE.AnimationMixer(clone);
@@ -292,18 +317,36 @@ function SceneNodeModel({
     };
   }, [clone, animations, clipName]);
 
+  if (visible === false) {
+    return null;
+  }
+
   return (
-    <group position={pos} rotation={rot} scale={scl}>
-      <primitive object={clone} />
-      {highlighted ? (
-        <mesh position={[0, 0.05, 0]}>
-          <ringGeometry args={[0.55, 0.65, 32]} />
-          <meshBasicMaterial color="#5b6cff" side={THREE.DoubleSide} />
-        </mesh>
+    <>
+      <group ref={setGroupObj} position={pos} rotation={rot} scale={scl}>
+        <primitive object={clone} />
+        {highlighted ? (
+          <mesh position={[0, 0.05, 0]}>
+            <ringGeometry args={[0.55, 0.65, 32]} />
+            <meshBasicMaterial color="#5b6cff" side={THREE.DoubleSide} />
+          </mesh>
+        ) : null}
+      </group>
+      {showGizmo && groupObj ? (
+        <TransformControls
+          object={groupObj}
+          mode="translate"
+          onMouseUp={() => {
+            if (!groupObj || !onTransformCommit) return;
+            const p = groupObj.position;
+            onTransformCommit([p.x, p.y, p.z]);
+          }}
+        />
       ) : null}
-    </group>
+    </>
   );
 }
+
 
 function SceneNodeMissing({
   transform,
@@ -338,6 +381,38 @@ function LoadError({ message }: { message: string }) {
   );
 }
 
+/** Walk loaded object graph for triangle + bone counts (S3-A #83). */
+function MeshStatsReporter({
+  object,
+  onStats,
+}: {
+  object: THREE.Object3D;
+  onStats: (s: { tris: number; bones: number }) => void;
+}) {
+  useEffect(() => {
+    let tris = 0;
+    let bones = 0;
+    object.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) {
+        const g = mesh.geometry;
+        const idx = g.index;
+        if (idx) tris += idx.count / 3;
+        else if (g.attributes.position) {
+          tris += g.attributes.position.count / 3;
+        }
+      }
+      if ((obj as THREE.Bone).isBone) bones += 1;
+      const skinned = obj as THREE.SkinnedMesh;
+      if (skinned.isSkinnedMesh && skinned.skeleton?.bones) {
+        bones = Math.max(bones, skinned.skeleton.bones.length);
+      }
+    });
+    onStats({ tris: Math.round(tris), bones });
+  }, [object, onStats]);
+  return null;
+}
+
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
@@ -359,6 +434,13 @@ export function App() {
   const [sceneRootId, setSceneRootId] = useState<string | undefined>(undefined);
   const [sceneSaveError, setSceneSaveError] = useState<string | null>(null);
   const [sceneSaving, setSceneSaving] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [viewerStats, setViewerStats] = useState<{
+    tris: number | null;
+    bones: number | null;
+    clips: number;
+  }>({ tris: null, bones: null, clips: 0 });
+  const viewerShellRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = () =>
     fetch(`${API}/api/assets`)
@@ -406,6 +488,7 @@ export function App() {
         id: n.id,
         assetId: n.assetId,
         defaultClip: n.defaultClip,
+        visible: n.visible !== false,
         transform: n.transform
           ? {
               position: (n.transform.position ?? [0, 0, 0]) as [
@@ -527,6 +610,7 @@ export function App() {
       {
         id,
         assetId: first?.id ?? first?.slug ?? "",
+        visible: true,
         transform: {
           position: [prev.length * 2, 0, 0],
           rotation: [0, 0, 0],
@@ -619,15 +703,24 @@ export function App() {
             id: n.id,
             assetId: n.assetId.trim(),
             defaultClip: n.defaultClip || undefined,
+            visible: n.visible !== false,
             transform: n.transform,
           })),
         },
       };
-      const r = await fetch(`${API}/api/assets`, {
-        method: "POST",
+      // Prefer PATCH scene (#23); fall back to full POST register.
+      let r = await fetch(`${API}/api/assets/${selected.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ scene: body.scene }),
       });
+      if (!r.ok) {
+        r = await fetch(`${API}/api/assets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
       const textBody = await r.text();
       if (!r.ok) throw new Error(`${r.status} ${textBody}`);
       const updated = JSON.parse(textBody) as AssetMeta;
@@ -693,11 +786,59 @@ export function App() {
     return probedClips.filter(isAllowlisted);
   }, [probedClips]);
 
+
+  // S3-A #83 — derive stats from metadata + live mesh probe.
+  useEffect(() => {
+    if (!selected) {
+      setViewerStats({ tris: null, bones: null, clips: 0 });
+      return;
+    }
+    const clips = (selected.clips ?? gltfClips ?? []).length;
+    const bones =
+      typeof selected.rig?.boneCount === "number"
+        ? selected.rig.boneCount
+        : selected.rig?.hasArmature
+          ? null
+          : 0;
+    setViewerStats({ tris: null, bones, clips });
+  }, [selected, gltfClips]);
+
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ tris: number; bones: number }>).detail;
+      if (!detail) return;
+      setViewerStats((prev) => ({
+        tris: detail.tris,
+        bones:
+          typeof selected?.rig?.boneCount === "number"
+            ? selected.rig.boneCount
+            : detail.bones || prev.bones,
+        clips: prev.clips,
+      }));
+    };
+    window.addEventListener("gp-mesh-stats", handler);
+    return () => window.removeEventListener("gp-mesh-stats", handler);
+  }, [selected?.rig?.boneCount]);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el = viewerShellRef.current;
+    if (!el) return;
+    try {
+      if (!document.fullscreenElement) {
+        await el.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      /* fullscreen blocked — ignore */
+    }
+  }, []);
+
   return (
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 2-G</p>
+        <p className="muted">localhost · Sprint 3-A</p>
         <input
           className="search"
           placeholder="Search…"
@@ -744,7 +885,7 @@ export function App() {
           </div>
         )}
       </aside>
-      <div className="viewer">
+      <div className="viewer" ref={viewerShellRef}>
         <div className="viewer-header">
           <div className="asset-title">
             {selected ? (
@@ -789,7 +930,51 @@ export function App() {
               </span>
             )}
           </div>
+          <div className="viewer-chrome">
+            <button type="button" className="tiny" onClick={() => void toggleFullscreen()}>
+              Fullscreen
+            </button>
+            <button
+              type="button"
+              className="tiny"
+              onClick={() => setStatsOpen((o) => !o)}
+            >
+              {statsOpen ? "Hide stats" : "Stats"}
+            </button>
+            {selected?.assetSchemaVersion != null && (
+              <span className="badge stage" title="assetSchemaVersion">
+                v{selected.assetSchemaVersion}
+              </span>
+            )}
+          </div>
         </div>
+        {statsOpen && (
+          <div className="stats-panel" aria-label="Viewer stats">
+            <div className="import-meta-title">Stats</div>
+            <div className="import-meta-row">
+              <span className="muted">tris</span>
+              <strong>{viewerStats.tris == null ? "—" : viewerStats.tris}</strong>
+            </div>
+            <div className="import-meta-row">
+              <span className="muted">bones</span>
+              <strong>
+                {viewerStats.bones == null ? "—" : viewerStats.bones}
+              </strong>
+            </div>
+            <div className="import-meta-row">
+              <span className="muted">clips</span>
+              <strong>{viewerStats.clips}</strong>
+            </div>
+            <div className="import-meta-row">
+              <span className="muted">stage</span>
+              <strong>{selected?.stage ?? "—"}</strong>
+            </div>
+            <div className="import-meta-row">
+              <span className="muted">characterType</span>
+              <strong>{selected?.characterType ?? "—"}</strong>
+            </div>
+          </div>
+        )}
         <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }}>
           <color attach="background" args={["#12151c"]} />
           <ambientLight intensity={0.65} />
@@ -828,6 +1013,28 @@ export function App() {
                       clipName={clipForNode}
                       transform={n.transform}
                       highlighted={sceneNodeId === n.id}
+                      selected={sceneNodeId === n.id}
+                      visible={(n as SceneNodeDraft).visible !== false}
+                      onTransformCommit={(position) => {
+                        setSceneDraft((prev) =>
+                          prev.map((node) =>
+                            node.id === n.id
+                              ? {
+                                  ...node,
+                                  transform: {
+                                    position,
+                                    rotation: (node.transform?.rotation ?? [
+                                      0, 0, 0,
+                                    ]) as [number, number, number],
+                                    scale: (node.transform?.scale ?? [
+                                      1, 1, 1,
+                                    ]) as [number, number, number],
+                                  },
+                                }
+                              : node,
+                          ),
+                        );
+                      }}
                     />
                   );
                 })
@@ -1192,6 +1399,19 @@ export function App() {
                             />
                           ))}
                         </div>
+                        <label className="scene-edit-row">
+                          <span>visible</span>
+                          <input
+                            type="checkbox"
+                            checked={n.visible !== false}
+                            onChange={(e) =>
+                              patchSceneNode(n.id, {
+                                visible: e.target.checked,
+                              })
+                            }
+                            aria-label={`visible for ${n.id}`}
+                          />
+                        </label>
                         <div className="scene-author-actions">
                           <button
                             type="button"
