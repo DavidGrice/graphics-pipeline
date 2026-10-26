@@ -365,6 +365,26 @@ app.patch("/api/assets/:id", async (req, res) => {
     if (body.scene !== undefined) {
       patch.scene = body.scene;
     }
+    // S3-B #137
+    if (body.license !== undefined) {
+      patch.license = body.license;
+    }
+    // S3-B #91 — merge importMeta (do not wipe unrelated fields)
+    if (body.importMeta !== undefined) {
+      if (body.importMeta === null || typeof body.importMeta !== "object") {
+        return res.status(400).json({ error: "importMeta must be an object" });
+      }
+      patch.importMeta = {
+        ...(existing.importMeta || {}),
+        ...body.importMeta,
+      };
+    }
+    // S3-B #8 HARDEN — forbid inventing clipDurations via PATCH
+    if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
+      return res.status(400).json({
+        error: "PATCH cannot modify clipDurations (probe-only write)",
+      });
+    }
 
     const prevVer =
       typeof existing.assetSchemaVersion === "number"
@@ -520,6 +540,16 @@ app.get("/api/assets/:id/preview", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
+});
+
+
+app.get("/api/openapi.json", (_req, res) => {
+  const yamlPath = path.join(REPO_ROOT, "docs", "openapi.yaml");
+  if (!fs.existsSync(yamlPath)) {
+    return res.status(404).json({ error: "docs/openapi.yaml missing" });
+  }
+  // Stub: return raw YAML as text with hint; full JSON convert is stretch
+  res.type("text/yaml").send(fs.readFileSync(yamlPath, "utf8"));
 });
 
 fs.mkdirSync(ASSETS_DIR, { recursive: true });

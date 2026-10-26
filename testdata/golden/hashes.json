@@ -1,0 +1,16 @@
+{
+  "billboard": {
+    "algo": "sha256",
+    "file": "billboard-spin.glb",
+    "sha256": "PLACEHOLDER_REFRESH_WITH_BLENDER",
+    "blenderHint": "5.2.3",
+    "note": "Regenerate via deterministic png_to_glb billboard smoke; never commit GLB bytes"
+  },
+  "rigged": {
+    "algo": "sha256",
+    "file": "rigged-smoke.glb",
+    "sha256": "PLACEHOLDER_REFRESH_WITH_BLENDER",
+    "blenderHint": "5.2.3",
+    "note": "Regenerate via deterministic png_to_glb/import_fbx rigged smoke; never commit GLB bytes"
+  }
+}

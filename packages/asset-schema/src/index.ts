@@ -71,7 +71,38 @@ export const ClipTagsSchema = z
   .record(z.string(), z.array(ClipTagValueSchema).min(1))
   .optional();
 
-/** S3-A ships assetSchemaVersion = 3 (S1≈1, S2≈2). */
+/** S3-B #137 — SPDX allowlist (+ LicenseRef-*). Empty string rejects. */
+export const SPDX_LICENSE_IDS = [
+  "MIT",
+  "Apache-2.0",
+  "CC0-1.0",
+  "CC-BY-4.0",
+  "CC-BY-SA-4.0",
+  "GPL-3.0-only",
+  "LicenseRef-Mixamo",
+  "UNLICENSED",
+] as const;
+
+export function isValidSpdxLicense(id: string): boolean {
+  if (!id || !id.trim()) return false;
+  if ((SPDX_LICENSE_IDS as readonly string[]).includes(id)) return true;
+  if (id.startsWith("LicenseRef-") && id.length > "LicenseRef-".length) return true;
+  return false;
+}
+
+export const LicenseSpdxSchema = z
+  .string()
+  .min(1)
+  .refine(isValidSpdxLicense, {
+    message: "license must be a known SPDX id or LicenseRef-* (empty rejected)",
+  });
+
+/** S3-B #8 — clip name → duration_ms (probe-only write). */
+export const ClipDurationsSchema = z
+  .record(z.string(), z.number().int().nonnegative())
+  .optional();
+
+/** S3-A/B ships assetSchemaVersion = 3 (prefer stay on 3). */
 export const ASSET_SCHEMA_VERSION = 3 as const;
 
 /** Contract clip names (required ∪ allowlist ∪ billboard spin). */
@@ -118,6 +149,20 @@ export const SceneNodeTransformSchema = z
     position: z.tuple([z.number(), z.number(), z.number()]).optional(),
     rotation: z.tuple([z.number(), z.number(), z.number()]).optional(),
     scale: z.tuple([z.number(), z.number(), z.number()]).optional(),
+  })
+  .superRefine((t, ctx) => {
+    // S3-B #25 HARDEN: scale ≤ 0 on any axis → reject
+    if (t.scale) {
+      for (let i = 0; i < 3; i++) {
+        if (!(t.scale[i] > 0)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["scale", i],
+            message: "transform.scale axes must be > 0",
+          });
+        }
+      }
+    }
   })
   .optional();
 
@@ -173,7 +218,11 @@ export const AssetSchema = z
     clips: z.array(z.string()).default([]),
     clipUx: ClipUxSchema,
     clipTags: ClipTagsSchema,
-    /** Schema document version; S3-A = 3. Missing on older assets → treat as 1|2 in readers. */
+    /** S3-B #8 probe-only durations (ms). */
+    clipDurations: ClipDurationsSchema,
+    /** S3-B #137 SPDX license. */
+    license: LicenseSpdxSchema.optional(),
+    /** Schema document version; S3-A/B = 3. Missing on older assets → treat as 1|2 in readers. */
     assetSchemaVersion: z.number().int().positive().optional(),
     importMeta: ImportMetaSchema.optional(),
     scene: SceneGraphSchema.optional(),
@@ -422,6 +471,19 @@ export const AssetSchema = z
       }
     }
 
+    // --- S3-B #8: clipDurations keys ∈ clips[]; values ≥ 0 int (zod) ---
+    if (asset.clipDurations) {
+      for (const clipName of Object.keys(asset.clipDurations)) {
+        if (!asset.clips.includes(clipName)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["clipDurations", clipName],
+            message: `clipDurations key "${clipName}" is not in clips[]`,
+          });
+        }
+      }
+    }
+
     // --- S3-A #13: humanoid bone-count gate (≥ 8 distinct bones) ---
     if (asset.characterType === "humanoid") {
       const bc = asset.rig.boneCount;
@@ -444,6 +506,7 @@ export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
 export type ClipUx = z.infer<typeof ClipUxSchema>;
 export type ClipTags = z.infer<typeof ClipTagsSchema>;
+export type ClipDurations = z.infer<typeof ClipDurationsSchema>;
 export type ImportMeta = z.infer<typeof ImportMetaSchema>;
 export type SceneNode = z.infer<typeof SceneNodeSchema>;
 export type SceneGraph = z.infer<typeof SceneGraphSchema>;

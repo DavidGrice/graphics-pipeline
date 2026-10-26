@@ -47,6 +47,8 @@ type AssetMeta = {
   stage?: string;
   tags?: string[];
   clipTags?: Record<string, Array<"locomotion" | "emote" | "combat">>;
+  clipDurations?: Record<string, number>;
+  license?: string;
   assetSchemaVersion?: number;
   scene?: {
     version?: number;
@@ -79,6 +81,25 @@ const CLIP_ALLOWLIST = new Set([
   "death",
   "sit",
 ]);
+
+const CONTRACT_CLIP_DESTS = [
+  "idle",
+  "walk",
+  "run",
+  "spin",
+  "jump",
+  "wave",
+  "attack",
+  "death",
+  "sit",
+] as const;
+
+function isContractClipDest(name: string): boolean {
+  return (
+    (CONTRACT_CLIP_DESTS as readonly string[]).includes(name) ||
+    (name.startsWith("emote_") && name.length > "emote_".length)
+  );
+}
 
 function isAllowlisted(name: string): boolean {
   return CLIP_ALLOWLIST.has(name) || name.startsWith("emote_");
@@ -256,7 +277,12 @@ function GltfPlayer({
 }
 
 
-/** S2-F-E2 / S3-A — scene child + translate gizmo (#24) + visibility (#33). */
+/** S2-F / S3-A/B — scene child + translate/rotate/scale gizmo + snap + visibility. */
+function snapScalar(v: number, step: number): number {
+  const s = Number.isFinite(step) && step > 0 ? step : 0.25;
+  return Math.round(v / s) * s;
+}
+
 function SceneNodeModel({
   url,
   clipName,
@@ -264,6 +290,9 @@ function SceneNodeModel({
   highlighted,
   selected,
   visible = true,
+  gizmoMode = "translate",
+  snapEnabled = false,
+  snapStep = 0.25,
   onTransformCommit,
 }: {
   url: string;
@@ -276,7 +305,14 @@ function SceneNodeModel({
   highlighted?: boolean;
   selected?: boolean;
   visible?: boolean;
-  onTransformCommit?: (pos: [number, number, number]) => void;
+  gizmoMode?: "translate" | "rotate" | "scale";
+  snapEnabled?: boolean;
+  snapStep?: number;
+  onTransformCommit?: (next: {
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }) => void;
 }) {
   const { scene, animations } = useGLTF(url);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
@@ -335,11 +371,44 @@ function SceneNodeModel({
       {showGizmo && groupObj ? (
         <TransformControls
           object={groupObj}
-          mode="translate"
+          mode={gizmoMode}
           onMouseUp={() => {
             if (!groupObj || !onTransformCommit) return;
-            const p = groupObj.position;
-            onTransformCommit([p.x, p.y, p.z]);
+            let position: [number, number, number] = [
+              groupObj.position.x,
+              groupObj.position.y,
+              groupObj.position.z,
+            ];
+            let rotation: [number, number, number] = [
+              groupObj.rotation.x,
+              groupObj.rotation.y,
+              groupObj.rotation.z,
+            ];
+            const scale: [number, number, number] = [
+              groupObj.scale.x,
+              groupObj.scale.y,
+              groupObj.scale.z,
+            ];
+            if (snapEnabled && gizmoMode === "translate") {
+              const step = Number.isFinite(snapStep) && snapStep > 0 ? snapStep : 0.25;
+              position = [
+                snapScalar(position[0], step),
+                snapScalar(position[1], step),
+                snapScalar(position[2], step),
+              ];
+              groupObj.position.set(...position);
+            }
+            if (snapEnabled && gizmoMode === "rotate") {
+              // nice-to-have: 15° increments
+              const deg = Math.PI / 12;
+              rotation = [
+                snapScalar(rotation[0], deg),
+                snapScalar(rotation[1], deg),
+                snapScalar(rotation[2], deg),
+              ];
+              groupObj.rotation.set(...rotation);
+            }
+            onTransformCommit({ position, rotation, scale });
           }}
         />
       ) : null}
@@ -467,6 +536,18 @@ export function App() {
   const [sceneRootId, setSceneRootId] = useState<string | undefined>(undefined);
   const [sceneSaveError, setSceneSaveError] = useState<string | null>(null);
   const [sceneSaving, setSceneSaving] = useState(false);
+  const [gizmoMode, setGizmoMode] = useState<"translate" | "rotate" | "scale">(
+    "translate",
+  );
+  const [snapEnabled, setSnapEnabled] = useState(false);
+  const [snapStep, setSnapStep] = useState(0.25);
+  const [actionMapDraft, setActionMapDraft] = useState<Record<string, string>>(
+    {},
+  );
+  const [actionMapSource, setActionMapSource] = useState<string>("unknown");
+  const [actionMapDirty, setActionMapDirty] = useState(false);
+  const [actionMapError, setActionMapError] = useState<string | null>(null);
+  const [actionMapSaving, setActionMapSaving] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [viewerStats, setViewerStats] = useState<{
     tris: number | null;
@@ -516,6 +597,10 @@ export function App() {
       return;
     }
     setClipUx(mergeClipUx(selected));
+    setActionMapDraft({ ...(selected.importMeta?.actionMap ?? {}) });
+    setActionMapSource(selected.importMeta?.source ?? "unknown");
+    setActionMapDirty(false);
+    setActionMapError(null);
     if (selected.stage === "scene") {
       const nodes = (selected.scene?.nodes ?? []).map((n) => ({
         id: n.id,
@@ -682,8 +767,12 @@ export function App() {
     idx: 0 | 1 | 2,
     raw: string,
   ) => {
-    const num = Number(raw);
+    let num = Number(raw);
     if (!Number.isFinite(num)) return;
+    if (key === "position" && snapEnabled) {
+      const step = Number.isFinite(snapStep) && snapStep > 0 ? snapStep : 0.25;
+      num = snapScalar(num, step);
+    }
     setSceneDraft((prev) =>
       prev.map((n) => {
         if (n.id !== id) return n;
@@ -711,6 +800,54 @@ export function App() {
         };
       }),
     );
+  };
+
+
+  const persistActionMap = async () => {
+    if (!selected) return;
+    // Validate dests
+    for (const [src, dest] of Object.entries(actionMapDraft)) {
+      if (!src.trim()) {
+        setActionMapError("actionMap key cannot be empty");
+        return;
+      }
+      if (!isContractClipDest(dest)) {
+        setActionMapError(
+          `importMeta.actionMap.${src}: "${dest}" is not a contract clip name`,
+        );
+        return;
+      }
+    }
+    setActionMapSaving(true);
+    setActionMapError(null);
+    try {
+      const importMeta = {
+        ...(selected.importMeta ?? {}),
+        source: (actionMapSource ||
+          selected.importMeta?.source ||
+          "unknown") as string,
+        actionMap: { ...actionMapDraft },
+      };
+      const r = await fetch(`${API}/api/assets/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ importMeta }),
+      });
+      const textBody = await r.text();
+      if (!r.ok) throw new Error(`${r.status} ${textBody}`);
+      const updated = JSON.parse(textBody) as AssetMeta;
+      setAssets((list) =>
+        list.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)),
+      );
+      setSelected((cur) =>
+        cur && cur.id === updated.id ? { ...cur, ...updated } : cur,
+      );
+      setActionMapDirty(false);
+    } catch (err) {
+      setActionMapError(`Save actionMap failed: ${err}`);
+    } finally {
+      setActionMapSaving(false);
+    }
   };
 
   const persistScene = async () => {
@@ -883,7 +1020,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 3-A</p>
+        <p className="muted">localhost · Sprint 3-B</p>
         <input
           className="search"
           placeholder="Search…"
@@ -1060,20 +1197,19 @@ export function App() {
                       highlighted={sceneNodeId === n.id}
                       selected={sceneNodeId === n.id}
                       visible={(n as SceneNodeDraft).visible !== false}
-                      onTransformCommit={(position) => {
+                      gizmoMode={gizmoMode}
+                      snapEnabled={snapEnabled}
+                      snapStep={snapStep}
+                      onTransformCommit={(next) => {
                         setSceneDraft((prev) =>
                           prev.map((node) =>
                             node.id === n.id
                               ? {
                                   ...node,
                                   transform: {
-                                    position,
-                                    rotation: (node.transform?.rotation ?? [
-                                      0, 0, 0,
-                                    ]) as [number, number, number],
-                                    scale: (node.transform?.scale ?? [
-                                      1, 1, 1,
-                                    ]) as [number, number, number],
+                                    position: next.position,
+                                    rotation: next.rotation,
+                                    scale: next.scale,
                                   },
                                 }
                               : node,
@@ -1245,49 +1381,149 @@ export function App() {
             </span>
           </div>
         )}
-        {selected?.importMeta && (
+        {selected && (
           <div className="import-meta-panel" aria-label="Import metadata">
-            <div className="import-meta-title">Import</div>
-            <div className="import-meta-row">
-              <span className="muted">source</span>
-              <strong>{selected.importMeta.source ?? "—"}</strong>
+            <div className="import-meta-title">
+              Import / actionMap{" "}
+              {actionMapDirty ? (
+                <span className="badge off"> Unsaved</span>
+              ) : (
+                <span className="badge on"> Saved</span>
+              )}
             </div>
-            {selected.importMeta.originalFilename && (
+            {selected.importMeta ? (
+              <>
+                <div className="import-meta-row">
+                  <span className="muted">source</span>
+                  <select
+                    value={actionMapSource}
+                    onChange={(e) => {
+                      setActionMapSource(e.target.value);
+                      setActionMapDirty(true);
+                    }}
+                    aria-label="importMeta.source"
+                  >
+                    {["mixamo", "fbx", "png_pipeline", "unknown"].map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selected.importMeta.originalFilename && (
+                  <div className="import-meta-row">
+                    <span className="muted">originalFilename</span>
+                    <code>{selected.importMeta.originalFilename}</code>
+                  </div>
+                )}
+                {selected.importMeta.boneMapStub && (
+                  <div className="import-meta-row">
+                    <span className="muted">boneMapStub</span>
+                    <code>{selected.importMeta.boneMapStub}</code>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="muted">
+                No import metadata — add a mapping row to create a draft.
+              </p>
+            )}
+            <div className="import-meta-actions">
+              <span className="muted">actionMap editor</span>
+              {Object.entries(actionMapDraft).map(([src, dest]) => (
+                <div key={src} className="scene-edit-row">
+                  <input
+                    type="text"
+                    value={src}
+                    aria-label={`actionMap src ${src}`}
+                    onChange={(e) => {
+                      const nextSrc = e.target.value;
+                      setActionMapDraft((prev) => {
+                        const copy = { ...prev };
+                        delete copy[src];
+                        if (nextSrc.trim()) copy[nextSrc.trim()] = dest;
+                        return copy;
+                      });
+                      setActionMapDirty(true);
+                    }}
+                  />
+                  <span>→</span>
+                  <select
+                    value={dest}
+                    aria-label={`actionMap dest for ${src}`}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setActionMapDraft((prev) => ({ ...prev, [src]: v }));
+                      setActionMapDirty(true);
+                    }}
+                  >
+                    {CONTRACT_CLIP_DESTS.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="tiny danger"
+                    onClick={() => {
+                      setActionMapDraft((prev) => {
+                        const copy = { ...prev };
+                        delete copy[src];
+                        return copy;
+                      });
+                      setActionMapDirty(true);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div className="scene-author-actions">
+                <button
+                  type="button"
+                  className="tiny"
+                  onClick={() => {
+                    let i = 1;
+                    let key = `Action_${i}`;
+                    while (actionMapDraft[key]) {
+                      i += 1;
+                      key = `Action_${i}`;
+                    }
+                    setActionMapDraft((prev) => ({ ...prev, [key]: "idle" }));
+                    if (!selected.importMeta) setActionMapSource("unknown");
+                    setActionMapDirty(true);
+                  }}
+                >
+                  + Add mapping
+                </button>
+                <button
+                  type="button"
+                  className="tiny primary"
+                  disabled={actionMapSaving || !actionMapDirty}
+                  onClick={() => void persistActionMap()}
+                >
+                  {actionMapSaving ? "Saving…" : "Save actionMap"}
+                </button>
+              </div>
+              {actionMapError && <p className="err">{actionMapError}</p>}
+            </div>
+            {selected.license && (
               <div className="import-meta-row">
-                <span className="muted">originalFilename</span>
-                <code>{selected.importMeta.originalFilename}</code>
+                <span className="muted">license</span>
+                <code>{selected.license}</code>
               </div>
             )}
-            {selected.importMeta.boneMapStub && (
-              <div className="import-meta-row">
-                <span className="muted">boneMapStub</span>
-                <code>{selected.importMeta.boneMapStub}</code>
-              </div>
-            )}
-            {selected.importMeta.characterTypeHint && (
-              <div className="import-meta-row">
-                <span className="muted">characterTypeHint</span>
-                <span>{selected.importMeta.characterTypeHint}</span>
-              </div>
-            )}
-            {selected.importMeta.humanoidPngApproved === true && (
-              <div className="import-meta-row">
-                <span className="muted">humanoidPngApproved</span>
-                <span>true</span>
-              </div>
-            )}
-            {selected.importMeta.actionMap &&
-              Object.keys(selected.importMeta.actionMap).length > 0 && (
+            {selected.clipDurations &&
+              Object.keys(selected.clipDurations).length > 0 && (
                 <div className="import-meta-actions">
-                  <span className="muted">actionMap</span>
+                  <span className="muted">clipDurations (ms)</span>
                   <div className="action-chips">
-                    {Object.entries(selected.importMeta.actionMap).map(
-                      ([src, dest]) => (
-                        <span key={src} className="action-chip">
-                          {src} → {dest}
-                        </span>
-                      ),
-                    )}
+                    {Object.entries(selected.clipDurations).map(([n, ms]) => (
+                      <span key={n} className="action-chip">
+                        {n}: {ms}ms
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1323,6 +1559,37 @@ export function App() {
               >
                 {sceneSaving ? "Saving…" : sceneDirty ? "Save" : "Saved"}
               </button>
+              <span className="muted">gizmo</span>
+              {(["translate", "rotate", "scale"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={gizmoMode === m ? "tiny primary" : "tiny"}
+                  onClick={() => setGizmoMode(m)}
+                >
+                  {m}
+                </button>
+              ))}
+              <label className="tiny" style={{ display: "inline-flex", gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={snapEnabled}
+                  onChange={(e) => setSnapEnabled(e.target.checked)}
+                />
+                snap
+              </label>
+              <input
+                type="number"
+                step="0.05"
+                min="0.05"
+                value={snapStep}
+                aria-label="snap step"
+                style={{ width: "4rem" }}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setSnapStep(Number.isFinite(v) && v > 0 ? v : 0.25);
+                }}
+              />
             </div>
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
             <ul className="scene-node-list">

@@ -2,7 +2,7 @@
   "name": "graphics-pipeline",
   "version": "0.1.0",
   "private": true,
-  "description": "Krita MCP → Blender GLB → MERN + R3F world builder (Sprint 1 MVP)",
+  "description": "Krita MCP \u2192 Blender GLB \u2192 MERN + R3F world builder (Sprint 1 MVP)",
   "workspaces": [
     "packages/*",
     "apps/mcp-krita",
@@ -17,10 +17,13 @@
     "dev:world": "npm run dev -w @graphics-pipeline/world-builder",
     "dev:client": "npm run dev -w @graphics-pipeline/world-builder-client",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test:s1": "node --test tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs",
+    "test:s1": "node --test tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs tests/s3b-*.test.mjs",
     "smoke:live": "bash apps/blender-pipeline/smoke_live.sh",
     "test:s2a": "node --test tests/s2a-*.test.mjs",
-    "test:s2b": "node --test tests/s2b-*.test.mjs"
+    "test:s2b": "node --test tests/s2b-*.test.mjs",
+    "test:golden": "node --test tests/s3b-growth.test.mjs --test-name-pattern=golden",
+    "pack:assets": "node apps/blender-pipeline/pack_assets.mjs",
+    "import:pack": "node apps/blender-pipeline/import_pack.mjs"
   },
   "license": "MIT"
 }

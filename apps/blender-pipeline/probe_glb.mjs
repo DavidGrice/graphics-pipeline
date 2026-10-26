@@ -52,12 +52,29 @@ export function probeGlb(filePath) {
       jointNames.add(name);
     }
   }
+  // S3-B #8 — duration_ms from accessor max on animation sampler inputs
+  const accessors = jsonChunk.accessors || [];
+  /** @type {Record<string, number>} */
+  const clipDurations = {};
+  for (const anim of jsonChunk.animations || []) {
+    let maxT = 0;
+    for (const s of anim.samplers || []) {
+      const acc = accessors[s.input];
+      if (acc && Array.isArray(acc.max) && typeof acc.max[0] === "number") {
+        maxT = Math.max(maxT, acc.max[0]);
+      }
+    }
+    const name = anim.name || "unnamed";
+    clipDurations[name] = Math.round(maxT * 1000);
+  }
+
   return {
     clips: animations,
     hasArmature: skins.length > 0,
     hasWeights,
     boneCount: jointNames.size,
     jointNames: [...jointNames],
+    clipDurations,
   };
 }
 
