@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { probeGlb } from "./probe_glb.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -25,49 +26,6 @@ function arg(name, fallback) {
 }
 function flag(name) {
   return process.argv.includes(`--${name}`);
-}
-
-/** Minimal GLB JSON-chunk probe (no deps). */
-function probeGlb(filePath) {
-  const buf = fs.readFileSync(filePath);
-  if (buf.length < 20 || buf.toString("utf8", 0, 4) !== "glTF") {
-    throw new Error(`not a GLB: ${filePath}`);
-  }
-  let offset = 12;
-  let jsonChunk = null;
-  const total = buf.readUInt32LE(8);
-  while (offset + 8 <= total && offset + 8 <= buf.length) {
-    const clen = buf.readUInt32LE(offset);
-    const ctype = buf.toString("utf8", offset + 4, offset + 8);
-    offset += 8;
-    const chunk = buf.subarray(offset, offset + clen);
-    offset += clen;
-    if (ctype === "JSON") {
-      jsonChunk = JSON.parse(chunk.toString("utf8"));
-      break;
-    }
-  }
-  if (!jsonChunk) throw new Error("GLB missing JSON chunk");
-  const animations = (jsonChunk.animations || []).map((a) => a.name || "unnamed");
-  const skins = jsonChunk.skins || [];
-  let hasWeights = false;
-  for (const mesh of jsonChunk.meshes || []) {
-    for (const prim of mesh.primitives || []) {
-      const attrs = prim.attributes || {};
-      if (
-        Object.keys(attrs).some(
-          (k) => k.startsWith("JOINTS") || k.startsWith("WEIGHTS"),
-        )
-      ) {
-        hasWeights = true;
-      }
-    }
-  }
-  return {
-    clips: animations,
-    hasArmature: skins.length > 0,
-    hasWeights,
-  };
 }
 
 function validateProbed({ stage, clips, hasArmature, hasWeights, formatsGlb }) {
@@ -162,7 +120,7 @@ if (importMetaPath) {
 
 const probed = probeGlb(glbAbs);
 console.log(
-  `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights}`,
+  `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
 );
 
 // Derive stage from probe (caller --mode is hint only).
@@ -260,6 +218,7 @@ const body = {
   rig: {
     hasArmature: probed.hasArmature,
     hasWeights: probed.hasWeights,
+    boneCount: probed.boneCount,
     blenderVersionTested: process.env.BLENDER_VERSION_TESTED || "5.2.3",
   },
   createdAt: now,

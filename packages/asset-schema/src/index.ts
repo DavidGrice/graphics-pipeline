@@ -43,7 +43,7 @@ export const AssetFormatsSchema = z
 export const AssetRigSchema = z.object({
   hasArmature: z.boolean(),
   hasWeights: z.boolean(),
-  /** Distinct bone/joint count from probe or Blender export (S3-A #13). */
+  /** Unique joint-name count from GLB skins (S3-A #13) — not duplicate skin refs. */
   boneCount: z.number().int().nonnegative().optional(),
   blenderVersionTested: z.string().optional(),
 });

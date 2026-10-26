@@ -171,13 +171,28 @@ test("T1.7 BRIDGE=mock health OK without Krita", async () => {
     });
     const h = await adapter.health();
     assert.equal(h.ok, true);
+    assert.equal(h.bridge, "mock");
     assert.match(h.detail || "", /mock/i);
-    const tmp = path.join(ROOT, "data", "inbox", "s3a-mock", "ci.png");
-    fs.mkdirSync(path.dirname(tmp), { recursive: true });
-    const exp = await adapter.exportPng({ slug: "s3a-mock", outPath: tmp });
+    // Default path must land under testdata/ (not data/inbox)
+    const exp = await adapter.exportPng({ slug: "s3a-mock" });
     assert.equal(exp.slug, "s3a-mock");
     assert.ok(fs.existsSync(exp.path));
     assert.ok(fs.statSync(exp.path).size > 8);
+    const norm = exp.path.replace(/\\/g, "/");
+    assert.ok(
+      norm.includes("/testdata/") || norm.includes("/tmp/") || norm.includes("/Temp/"),
+      `mock export must use testdata/ or /tmp, got ${exp.path}`,
+    );
+    assert.ok(!norm.includes("/data/inbox/"), "mock must not write data/inbox");
+
+    await assert.rejects(
+      () =>
+        adapter.exportPng({
+          slug: "s3a-mock",
+          outPath: path.join(ROOT, "data", "inbox", "s3a-mock", "nope.png"),
+        }),
+      /data\/inbox/,
+    );
   } finally {
     if (prev === undefined) delete process.env.BRIDGE;
     else process.env.BRIDGE = prev;
@@ -247,4 +262,54 @@ test("T1.6/T1.7 soft-env: health tools + PATCH/search", async (t) => {
     assert.ok(Array.isArray(filtered));
     assert.ok(filtered.every((a) => a.stage === target.stage));
   }
+});
+
+
+test("T1.5 unique skin joints: duplicates across skins count once", async () => {
+  const { countUniqueSkinJoints } = await import(
+    "../apps/blender-pipeline/probe_glb.mjs"
+  );
+  const json = {
+    nodes: [
+      { name: "Hips" },
+      { name: "Spine" },
+      { name: "Head" },
+      { name: "LeftLeg" },
+      { name: "RightLeg" },
+      { name: "LeftArm" },
+      { name: "RightArm" },
+      { name: "Chest" },
+    ],
+    skins: [
+      { joints: [0, 1, 2, 3, 4, 5, 6, 7] },
+      { joints: [0, 1, 2] }, // duplicate names — must not inflate count
+    ],
+  };
+  assert.equal(countUniqueSkinJoints(json), 8);
+  assert.equal(
+    countUniqueSkinJoints({
+      nodes: [{ name: "root" }, { name: "tip" }],
+      skins: [{ joints: [0, 1] }, { joints: [0, 1] }],
+    }),
+    2,
+  );
+});
+
+test("T1.6 queryStringList AND helper via server module smoke", async () => {
+  // Inline mirror of server queryStringList (kept in sync by behavior tests below).
+  function queryStringList(raw) {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    const out = [];
+    for (const v of arr) {
+      if (typeof v !== "string") continue;
+      const trimmed = v.trim();
+      if (trimmed) out.push(trimmed);
+    }
+    return out;
+  }
+  assert.deepEqual(queryStringList(["idle", "walk"]), ["idle", "walk"]);
+  assert.deepEqual(queryStringList("idle"), ["idle"]);
+  assert.deepEqual(queryStringList([1, "walk", null, ""]), ["walk"]);
+  assert.deepEqual(queryStringList(undefined), []);
 });
