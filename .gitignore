@@ -85,4 +85,7 @@ venv/
 !tests/fixtures/*.png
 
 # S3-A mock bridge exports (never commit)
-testdata/
+testdata/**
+!testdata/golden/
+!testdata/golden/**
+testdata/golden/**/*.glb
