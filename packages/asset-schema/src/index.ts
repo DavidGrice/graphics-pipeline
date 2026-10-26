@@ -43,6 +43,8 @@ export const AssetFormatsSchema = z
 export const AssetRigSchema = z.object({
   hasArmature: z.boolean(),
   hasWeights: z.boolean(),
+  /** Distinct bone/joint count from probe or Blender export (S3-A #13). */
+  boneCount: z.number().int().nonnegative().optional(),
   blenderVersionTested: z.string().optional(),
 });
 
@@ -54,6 +56,23 @@ export const ClipUxSchema = z
     disabled: z.array(z.string()).optional(),
   })
   .optional();
+
+
+/** S3-A #5 — clip taxonomy tags (fail-closed enum). */
+export const CLIP_TAG_VALUES = ["locomotion", "emote", "combat"] as const;
+export type ClipTagValue = (typeof CLIP_TAG_VALUES)[number];
+export const ClipTagValueSchema = z.enum(CLIP_TAG_VALUES);
+
+/**
+ * Map clip name → tags. Keys must exist in asset.clips[] (enforced in AssetSchema).
+ * Unknown tag strings reject at parse time.
+ */
+export const ClipTagsSchema = z
+  .record(z.string(), z.array(ClipTagValueSchema).min(1))
+  .optional();
+
+/** S3-A ships assetSchemaVersion = 3 (S1≈1, S2≈2). */
+export const ASSET_SCHEMA_VERSION = 3 as const;
 
 /** Contract clip names (required ∪ allowlist ∪ billboard spin). */
 export const CONTRACT_CLIP_NAMES = [
@@ -107,6 +126,8 @@ export const SceneNodeSchema = z.object({
   assetId: z.string().min(1),
   transform: SceneNodeTransformSchema,
   defaultClip: z.string().optional(),
+  /** S3-A #33 — default true when omitted; false hides in compose, keeps in graph. */
+  visible: z.boolean().optional(),
 });
 
 export const SceneGraphSchema = z
@@ -151,6 +172,9 @@ export const AssetSchema = z
     tags: z.array(z.string()).default([]),
     clips: z.array(z.string()).default([]),
     clipUx: ClipUxSchema,
+    clipTags: ClipTagsSchema,
+    /** Schema document version; S3-A = 3. Missing on older assets → treat as 1|2 in readers. */
+    assetSchemaVersion: z.number().int().positive().optional(),
     importMeta: ImportMetaSchema.optional(),
     scene: SceneGraphSchema.optional(),
     formats: AssetFormatsSchema,
@@ -385,6 +409,32 @@ export const AssetSchema = z
       });
     }
 
+    // --- S3-A #5: clipTags keys ∈ clips[]; values ∈ enum (enum already Zod-gated) ---
+    if (asset.clipTags) {
+      for (const clipName of Object.keys(asset.clipTags)) {
+        if (!asset.clips.includes(clipName)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["clipTags", clipName],
+            message: `clipTags key "${clipName}" is not in clips[]`,
+          });
+        }
+      }
+    }
+
+    // --- S3-A #13: humanoid bone-count gate (≥ 8 distinct bones) ---
+    if (asset.characterType === "humanoid") {
+      const bc = asset.rig.boneCount;
+      if (bc === undefined || bc < 8) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rig", "boneCount"],
+          message:
+            "HUMANOID_BONE_COUNT: characterType \"humanoid\" requires rig.boneCount ≥ 8",
+        });
+      }
+    }
+
   });
 
 export type AssetSlug = z.infer<typeof AssetSlugSchema>;
@@ -393,10 +443,16 @@ export type AssetStage = z.infer<typeof AssetStageSchema>;
 export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
 export type ClipUx = z.infer<typeof ClipUxSchema>;
+export type ClipTags = z.infer<typeof ClipTagsSchema>;
 export type ImportMeta = z.infer<typeof ImportMetaSchema>;
 export type SceneNode = z.infer<typeof SceneNodeSchema>;
 export type SceneGraph = z.infer<typeof SceneGraphSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
+
+/** Coerce missing assetSchemaVersion for readers (pre-S3-A → 1). */
+export function coerceAssetSchemaVersion(asset: { assetSchemaVersion?: number }): number {
+  return asset.assetSchemaVersion ?? 1;
+}
 
 /** Blueprint-compatible flattened paths view (derived). */
 export type AssetPathsView = {
