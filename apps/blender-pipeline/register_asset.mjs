@@ -200,6 +200,8 @@ const body = {
   stage,
   tags: ["sprint2d", stage],
   clips: probed.clips,
+  clipDurations: probed.clipDurations,
+  license: arg("license", "MIT"),
   formats: {
     glb: `assets/${id}/model.glb`,
     preview: previewDest
