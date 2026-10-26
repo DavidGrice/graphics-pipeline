@@ -1,8 +1,10 @@
 /**
  * S3-A #50 — BRIDGE=mock for CI.
- * health OK without Krita; export_png writes a deterministic 1×1 PNG.
+ * health OK without Krita; export_png writes a deterministic 1×1 PNG
+ * under testdata/ (or /tmp) — never data/inbox.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   assertSlug,
@@ -23,6 +25,17 @@ export type KritaMockAdapterOptions = {
   repoRoot?: string;
 };
 
+function defaultMockOutDir(repoRoot: string): string {
+  // Prefer repo testdata/; fall back to OS tmp if repoRoot unusable.
+  try {
+    const candidate = path.join(repoRoot, "testdata", "mock-exports");
+    fs.mkdirSync(candidate, { recursive: true });
+    return candidate;
+  } catch {
+    return path.join(os.tmpdir(), "graphics-pipeline-mock");
+  }
+}
+
 export class KritaMockAdapter implements KritaBridgeAdapter {
   private repoRoot: string;
 
@@ -35,6 +48,7 @@ export class KritaMockAdapter implements KritaBridgeAdapter {
       ok: true,
       krita: "running",
       detail: "BRIDGE=mock — no Krita required",
+      bridge: "mock",
     };
   }
 
@@ -43,7 +57,13 @@ export class KritaMockAdapter implements KritaBridgeAdapter {
     const ts = inboxTimestamp();
     const outPath =
       input.outPath ??
-      path.join(this.repoRoot, "data", "inbox", input.slug, `${ts}.png`);
+      path.join(defaultMockOutDir(this.repoRoot), input.slug, `${ts}.png`);
+    const norm = outPath.replace(/\\/g, "/");
+    if (norm.includes("/data/inbox/")) {
+      throw new Error(
+        "BRIDGE=mock refuses data/inbox paths — use testdata/ or /tmp",
+      );
+    }
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, FIXTURE_PNG);
     return { path: outPath, slug: input.slug, ts };

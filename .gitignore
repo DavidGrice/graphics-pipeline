@@ -83,3 +83,6 @@ venv/
 !tests/fixtures/
 !tests/fixtures/**.png
 !tests/fixtures/*.png
+
+# S3-A mock bridge exports (never commit)
+testdata/
