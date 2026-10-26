@@ -21,7 +21,7 @@ const base = {
     glb: glbPathFor("550e8400-e29b-41d4-a716-446655440099"),
     preview: previewPathFor("550e8400-e29b-41d4-a716-446655440099"),
   },
-  rig: { hasArmature: true, hasWeights: true },
+  rig: { hasArmature: true, hasWeights: true, boneCount: 15 },
   createdAt: "2026-10-25T01:00:00.000Z",
   updatedAt: "2026-10-25T01:00:00.000Z",
 };

@@ -2,6 +2,7 @@ export * from "./adapter.js";
 export * from "./krita-mcp-adapter.js";
 export * from "./krita-bridge-probe.js";
 export * from "./krita-firstparty-adapter.js";
+export * from "./krita-mock-adapter.js";
 export {
   createKritaBridgeAdapter,
   resolveBridgeMode,

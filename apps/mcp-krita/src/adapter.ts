@@ -5,7 +5,7 @@
  */
 
 export type HealthResult =
-  | { ok: true; krita: "running"; detail?: string }
+  | { ok: true; krita: "running"; detail?: string; bridge?: "mock" }
   | { ok: false; krita: "down" | "unknown"; error: string };
 
 export type ExportPngInput = {
