@@ -45,6 +45,8 @@ export const AssetRigSchema = z.object({
   hasWeights: z.boolean(),
   /** Unique joint-name count from GLB skins (S3-A #13) — not duplicate skin refs. */
   boneCount: z.number().int().nonnegative().optional(),
+  /** Distinct armature (skin root) count from GLB probe (S3-C #19) — must be ≤ 1. */
+  armatureCount: z.number().int().nonnegative().optional(),
   blenderVersionTested: z.string().optional(),
 });
 
@@ -495,6 +497,16 @@ export const AssetSchema = z
             "HUMANOID_BONE_COUNT: characterType \"humanoid\" requires rig.boneCount ≥ 8",
         });
       }
+    }
+
+    // --- S3-C #19: one armature per GLB ---
+    const ac = asset.rig.armatureCount;
+    if (ac !== undefined && ac > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rig", "armatureCount"],
+        message: `MULTI_ARMATURE: one armature per GLB (got ${ac})`,
+      });
     }
 
   });

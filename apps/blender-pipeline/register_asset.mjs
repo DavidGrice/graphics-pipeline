@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { probeGlb } from "./probe_glb.mjs";
+import { probeGlb, assertSingleArmature } from "./probe_glb.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -123,6 +123,14 @@ console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
 );
 
+// S3-C #19: one armature per GLB — reject before any copy/POST.
+try {
+  assertSingleArmature(probed);
+} catch (err) {
+  console.error(`ERROR ${err.message}`);
+  process.exit(1);
+}
+
 // Derive stage from probe (caller --mode is hint only).
 let stage = "mvp-billboard";
 let characterType = "billboard";
@@ -221,6 +229,7 @@ const body = {
     hasArmature: probed.hasArmature,
     hasWeights: probed.hasWeights,
     boneCount: probed.boneCount,
+    armatureCount: probed.armatureCount,
     blenderVersionTested: process.env.BLENDER_VERSION_TESTED || "5.2.3",
   },
   createdAt: now,
