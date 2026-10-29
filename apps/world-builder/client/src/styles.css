@@ -346,3 +346,10 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 .viewer:fullscreen .viewer-header {
   z-index: 4;
 }
+
+/* S3-C #21 — CharacterType badge in register list (text label always present) */
+.asset .badge.ctype { margin-left: 0.4rem; font-size: 0.7rem; vertical-align: middle; }
+.badge.ctype-accent { border-color: #e0a030; color: #ffd27a; }
+.badge.ctype-neutral { border-color: #6a7a8a; color: #c8d2dc; }
+.badge.ctype-muted { border-color: #444; color: #889; opacity: 0.8; }
+.badge.ctype-scene { border-color: #5b6cff; color: #b8c0ff; }

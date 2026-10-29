@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { characterTypeBadge } from "./characterTypeBadge";
 
 type ClipUx = {
   defaultClip?: string;
@@ -1046,6 +1047,18 @@ export function App() {
               >
                 {selected?.id === a.id ? "★ " : ""}
                 {a.name || a.slug}
+                {(() => {
+                  const b = characterTypeBadge(a);
+                  return (
+                    <span
+                      className={`badge ctype ctype-${b.tone}`}
+                      data-testid="ctype-badge"
+                      title={`characterType: ${b.label}`}
+                    >
+                      {b.label}
+                    </span>
+                  );
+                })()}
               </button>
             </li>
           ))}
