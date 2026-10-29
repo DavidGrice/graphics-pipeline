@@ -7,11 +7,41 @@ import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/dr
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
+import {
+  BLEND_MS_DEFAULT,
+  BLEND_MS_MAX,
+  TIMESCALE_DEFAULT,
+  TIMESCALE_MAX,
+  TIMESCALE_MIN,
+  TIMESCALE_STEP,
+  CAMERAS_MAX,
+  addCameraBookmark,
+  blendControlEnabled,
+  bonesToggleEnabled,
+  clampBlendMs,
+  clampTimeScale,
+  clipForHotkey,
+  deleteCameraBookmark,
+  duplicateSceneNode,
+  effectiveDurationMs,
+  hotkeyLabel,
+  nextCameraName,
+  planCrossfade,
+  renameCameraBookmark,
+  resolveSceneView,
+  roundVec,
+  type CameraBookmark,
+  type SceneView,
+} from "./s3cViewer";
 
 type ClipUx = {
   defaultClip?: string;
   order?: string[];
   disabled?: string[];
+  /** S3-C #1 crossfade ms (0–1000). */
+  blendMs?: number;
+  /** S3-C #2 mixer timeScale (0.5–2.0). */
+  timeScale?: number;
 };
 
 type SceneNodeDraft = {
@@ -65,6 +95,10 @@ type AssetMeta = {
       };
     }>;
     rootId?: string;
+    /** S3-C #31 */
+    view?: SceneView;
+    /** S3-C #32 */
+    cameras?: CameraBookmark[];
   };
 };
 
@@ -136,7 +170,64 @@ function mergeClipUx(asset: AssetMeta | null): ClipUx {
     defaultClip: remote.defaultClip ?? local.defaultClip,
     order: remote.order ?? local.order,
     disabled: remote.disabled ?? local.disabled,
+    blendMs: remote.blendMs ?? local.blendMs,
+    timeScale: remote.timeScale ?? local.timeScale,
   };
+}
+
+/**
+ * S3-C #82 — wireframe + SkeletonHelper overlay on a cloned GLB.
+ * Wireframe swaps in cloned materials (never mutates the cached GLTF materials)
+ * and restores originals on toggle off. Session-only; nothing persisted.
+ */
+function useViewerOverlay(
+  object: THREE.Object3D,
+  wireframe: boolean,
+  bones: boolean,
+  shadows: boolean,
+): THREE.SkeletonHelper | null {
+  useEffect(() => {
+    if (!wireframe) return;
+    const originals = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+    const clones: THREE.Material[] = [];
+    object.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+      originals.set(mesh, mesh.material);
+      const swap = (m: THREE.Material) => {
+        const c = m.clone() as THREE.Material & { wireframe?: boolean };
+        c.wireframe = true;
+        clones.push(c);
+        return c;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+    });
+    return () => {
+      for (const [mesh, mat] of originals) mesh.material = mat;
+      for (const c of clones) c.dispose();
+    };
+  }, [object, wireframe]);
+
+  useEffect(() => {
+    object.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = shadows;
+        mesh.receiveShadow = shadows;
+      }
+    });
+  }, [object, shadows]);
+
+  const helper = useMemo(() => {
+    if (!bones) return null;
+    let hasSkin = false;
+    object.traverse((o) => {
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) hasSkin = true;
+    });
+    return hasSkin ? new THREE.SkeletonHelper(object) : null;
+  }, [object, bones]);
+  useEffect(() => () => helper?.dispose(), [helper]);
+  return helper;
 }
 
 function orderClips(probed: string[], ux: ClipUx): string[] {
@@ -171,6 +262,11 @@ function GltfPlayer({
   onClips,
   onError,
   onDuration,
+  blendMs = BLEND_MS_DEFAULT,
+  timeScale = TIMESCALE_DEFAULT,
+  wireframe = false,
+  bones = false,
+  shadows = false,
 }: {
   url: string;
   clipName: string;
@@ -181,11 +277,23 @@ function GltfPlayer({
   onClips: (names: string[]) => void;
   onError: (msg: string | null) => void;
   onDuration: (sec: number) => void;
+  blendMs?: number;
+  timeScale?: number;
+  wireframe?: boolean;
+  bones?: boolean;
+  shadows?: boolean;
 }) {
   const { scene, animations } = useGLTF(url);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
+  const prevClipRef = useRef<string | null>(null);
   const clone = useMemo(() => scene.clone(true), [scene]);
+  const skeleton = useViewerOverlay(clone, wireframe, bones, shadows);
+
+  // S3-C #2 — timeScale on the active mixer only (clipDurations untouched).
+  useEffect(() => {
+    if (mixer.current) mixer.current.timeScale = clampTimeScale(timeScale);
+  }, [timeScale, clone]);
 
   useEffect(() => {
     onError(null);
@@ -194,16 +302,48 @@ function GltfPlayer({
 
   useEffect(() => {
     mixer.current = new THREE.AnimationMixer(clone);
+    mixer.current.timeScale = clampTimeScale(timeScale);
     return () => {
       mixer.current?.stopAllAction();
       mixer.current = null;
       actionRef.current = null;
+      prevClipRef.current = null;
     };
   }, [clone]);
 
   useEffect(() => {
     const m = mixer.current;
     if (!m) return;
+    // S3-C #1 — crossfade prev → next when the clip changes while playing.
+    const prevClip = prevClipRef.current;
+    prevClipRef.current = clipName || null;
+    const plan = planCrossfade({
+      prevClip,
+      nextClip: clipName,
+      blendMs,
+      clipCount: animations.length,
+      playing,
+      scrubbing,
+    });
+    const prevAction = actionRef.current;
+    const nextClipObj = clipName ? animations.find((a) => a.name === clipName) ?? null : null;
+    if (plan.kind === "fade" && prevAction && nextClipObj) {
+      const next = m.clipAction(nextClipObj);
+      // keep ≤ 2 weighted actions: stop everything except outgoing + incoming
+      for (const a of animations) {
+        const act = m.existingAction(a);
+        if (act && act !== prevAction && act !== next) act.stop();
+      }
+      next.reset();
+      next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+      next.clampWhenFinished = !loop;
+      next.setEffectiveWeight(1);
+      next.play();
+      prevAction.crossFadeTo(next, plan.seconds, false);
+      onDuration(nextClipObj.duration || 0);
+      actionRef.current = next;
+      return;
+    }
     m.stopAllAction();
     actionRef.current = null;
     if (!clipName) {
@@ -232,7 +372,7 @@ function GltfPlayer({
       m.update(0);
     }
     actionRef.current = action;
-  }, [animations, clipName, playing, loop, clone, scrubbing, scrub, onDuration]);
+  }, [animations, clipName, playing, loop, clone, scrubbing, scrub, onDuration, blendMs]);
 
   // Apply scrub while dragging without restarting action setup every frame when already scrubbing.
   useEffect(() => {
@@ -264,6 +404,7 @@ function GltfPlayer({
   return (
     <>
       <primitive object={clone} />
+      {skeleton ? <primitive object={skeleton} /> : null}
       <MeshStatsReporter
         object={clone}
         onStats={(s) => {
@@ -295,6 +436,9 @@ function SceneNodeModel({
   snapEnabled = false,
   snapStep = 0.25,
   onTransformCommit,
+  wireframe = false,
+  bones = false,
+  shadows = false,
 }: {
   url: string;
   clipName?: string;
@@ -314,11 +458,15 @@ function SceneNodeModel({
     rotation: [number, number, number];
     scale: [number, number, number];
   }) => void;
+  wireframe?: boolean;
+  bones?: boolean;
+  shadows?: boolean;
 }) {
   const { scene, animations } = useGLTF(url);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const [groupObj, setGroupObj] = useState<THREE.Group | null>(null);
   const clone = useMemo(() => scene.clone(true), [scene]);
+  const skeleton = useViewerOverlay(clone, wireframe, bones, shadows);
   const pos = transform?.position ?? ([0, 0, 0] as [number, number, number]);
   const rot = transform?.rotation ?? ([0, 0, 0] as [number, number, number]);
   const scl = transform?.scale ?? ([1, 1, 1] as [number, number, number]);
@@ -362,6 +510,7 @@ function SceneNodeModel({
     <>
       <group ref={setGroupObj} position={pos} rotation={rot} scale={scl}>
         <primitive object={clone} />
+        {skeleton ? <primitive object={skeleton} /> : null}
         {highlighted ? (
           <mesh position={[0, 0.05, 0]}>
             <ringGeometry args={[0.55, 0.65, 32]} />
@@ -498,6 +647,8 @@ function normalizeSceneSnapshot(
     };
   }>,
   rootId?: string,
+  view?: SceneView,
+  cameras?: CameraBookmark[],
 ): string {
   const normNodes = nodes.map((n) => ({
     id: n.id,
@@ -513,6 +664,14 @@ function normalizeSceneSnapshot(
   return JSON.stringify({
     rootId: rootId ?? normNodes[0]?.id,
     nodes: normNodes,
+    view: resolveSceneView(view),
+    cameras: (cameras ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      position: c.position,
+      target: c.target,
+      fov: c.fov,
+    })),
   });
 }
 
@@ -556,6 +715,18 @@ export function App() {
     clips: number;
   }>({ tris: null, bones: null, clips: 0 });
   const viewerShellRef = useRef<HTMLDivElement | null>(null);
+  // S3-C #82 — session-only overlay toggles (never persisted)
+  const [wireframe, setWireframe] = useState(false);
+  const [showBones, setShowBones] = useState(false);
+  // S3-C #31 — view toggles (scene: persisted in scene.view; non-scene: session)
+  const [viewDraft, setViewDraft] = useState<Required<SceneView>>(resolveSceneView(undefined));
+  // S3-C #32 — orbit bookmarks draft
+  const [camerasDraft, setCamerasDraft] = useState<CameraBookmark[]>([]);
+  const [cameraSel, setCameraSel] = useState<string>("");
+  const [cameraErr, setCameraErr] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const controlsRef = useRef<any>(null);
+  const clipUxTimer = useRef<number | null>(null);
 
   const refresh = () =>
     fetch(`${API}/api/assets`)
@@ -629,11 +800,16 @@ export function App() {
             },
       }));
       setSceneDraft(nodes as SceneNodeDraft[]);
+      setViewDraft(resolveSceneView(selected.scene?.view));
+      setCamerasDraft((selected.scene?.cameras ?? []).map((c) => ({ ...c })));
+      setCameraSel("");
+      setCameraErr(null);
       setSceneRootId(selected.scene?.rootId ?? nodes[0]?.id);
       setSceneNodeId(selected.scene?.rootId ?? nodes[0]?.id ?? null);
       setSceneSaveError(null);
     } else {
       setSceneDraft([]);
+      setCamerasDraft([]);
       setSceneRootId(undefined);
       setSceneNodeId(null);
       setSceneSaveError(null);
@@ -699,6 +875,22 @@ export function App() {
     void persistClipUx({ ...clipUx, disabled: [...disabled] });
   };
 
+  // S3-C #1 / #2 — viewer blend + speed, persisted via clip-ux PATCH (debounced).
+  const blendMs = clampBlendMs(clipUx.blendMs ?? BLEND_MS_DEFAULT);
+  const timeScale = clampTimeScale(clipUx.timeScale ?? TIMESCALE_DEFAULT);
+  const setPlaybackPref = (patch: Partial<Pick<ClipUx, "blendMs" | "timeScale">>) => {
+    const next: ClipUx = { ...clipUx, ...patch };
+    setClipUx(next);
+    if (clipUxTimer.current) window.clearTimeout(clipUxTimer.current);
+    clipUxTimer.current = window.setTimeout(() => void persistClipUx(next), 300);
+  };
+
+  const selectClip = useCallback((name: string) => {
+    setClip(name);
+    setPlaying(true);
+    setScrub(0);
+  }, []);
+
   const filtered = assets.filter((a) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -754,6 +946,74 @@ export function App() {
       if (sceneNodeId === id) setSceneNodeId(next[0]?.id ?? null);
       return next;
     });
+  };
+
+  // S3-C #26 — duplicate selected node (new id, +0.5 X or +snap step).
+  const duplicateSelectedNode = () => {
+    if (!sceneNodeId) return;
+    const res = duplicateSceneNode(sceneDraft, sceneNodeId, {
+      newId: newNodeId(),
+      snapEnabled,
+      snapStep,
+    });
+    if ("error" in res) {
+      setSceneSaveError(res.error);
+      return;
+    }
+    setSceneDraft(res.nodes as SceneNodeDraft[]);
+    setSceneNodeId(res.node.id);
+    setSceneSaveError(null);
+  };
+
+  // S3-C #32 — orbit bookmarks
+  const saveCameraView = () => {
+    const ctl = controlsRef.current;
+    const cam = ctl?.object as THREE.PerspectiveCamera | undefined;
+    if (!ctl || !cam) {
+      setCameraErr("camera controls not ready");
+      return;
+    }
+    const res = addCameraBookmark(camerasDraft, {
+      id: newNodeId(),
+      name: nextCameraName(camerasDraft),
+      position: roundVec([cam.position.x, cam.position.y, cam.position.z]),
+      target: roundVec([ctl.target.x, ctl.target.y, ctl.target.z]),
+      fov: typeof cam.fov === "number" ? Math.round(cam.fov) : undefined,
+    });
+    if ("error" in res) {
+      setCameraErr(res.error);
+      return;
+    }
+    setCamerasDraft(res.cameras);
+    setCameraSel(res.cameras[res.cameras.length - 1].id);
+    setCameraErr(null);
+  };
+  const jumpToCamera = (id: string) => {
+    setCameraSel(id);
+    const c = camerasDraft.find((x) => x.id === id);
+    const ctl = controlsRef.current;
+    const cam = ctl?.object as THREE.PerspectiveCamera | undefined;
+    if (!c || !ctl || !cam) return;
+    cam.position.set(...c.position);
+    if (typeof c.fov === "number") {
+      cam.fov = c.fov;
+      cam.updateProjectionMatrix();
+    }
+    ctl.target.set(...c.target);
+    ctl.update();
+  };
+  const renameCamera = (id: string, name: string) => {
+    const res = renameCameraBookmark(camerasDraft, id, name);
+    if ("error" in res) {
+      setCameraErr(res.error);
+      return;
+    }
+    setCamerasDraft(res.cameras);
+    setCameraErr(null);
+  };
+  const deleteCamera = (id: string) => {
+    setCamerasDraft((prev) => deleteCameraBookmark(prev, id));
+    if (cameraSel === id) setCameraSel("");
   };
 
   const patchSceneNode = (id: string, patch: Partial<SceneNodeDraft>) => {
@@ -877,6 +1137,8 @@ export function App() {
             visible: n.visible !== false,
             transform: n.transform,
           })),
+          view: { ground: viewDraft.ground, shadows: viewDraft.shadows },
+          cameras: camerasDraft,
         },
       };
       // PATCH only (#23 R1 nit): 4xx must surface — never silent POST fallback.
@@ -1003,7 +1265,7 @@ export function App() {
   const sceneDirty = useMemo(() => {
     if (!isScene || !selected) return false;
     const saved = selected.scene?.nodes ?? [];
-    const draftSnap = normalizeSceneSnapshot(sceneDraft, sceneRootId);
+    const draftSnap = normalizeSceneSnapshot(sceneDraft, sceneRootId, viewDraft, camerasDraft);
     const savedSnap = normalizeSceneSnapshot(
       saved.map((n) => ({
         id: n.id,
@@ -1013,9 +1275,35 @@ export function App() {
         transform: n.transform,
       })),
       selected.scene?.rootId,
+      selected.scene?.view,
+      selected.scene?.cameras,
     );
     return draftSnap !== savedSnap;
-  }, [isScene, selected, sceneDraft, sceneRootId]);
+  }, [isScene, selected, sceneDraft, sceneRootId, viewDraft, camerasDraft]);
+
+  // S3-C #80 — hotkeys 1..9 select the n-th CLIP in displayed order (viewer only).
+  useEffect(() => {
+    if (isScene || clipsForUi.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      const name = clipForHotkey(clipsForUi, {
+        key: e.key,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        target: e.target as HTMLElement | null,
+      });
+      if (!name) return;
+      e.preventDefault();
+      selectClip(name);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isScene, clipsForUi, selectClip]);
+
+  const bonesAvailable = bonesToggleEnabled(
+    selected?.rig?.boneCount ?? viewerStats.bones,
+    Boolean(selected?.rig?.hasArmature) || isScene,
+  );
 
   return (
     <div className="layout">
@@ -1170,16 +1458,29 @@ export function App() {
             </div>
           </div>
         )}
-        <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }}>
+        <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }} shadows={viewDraft.shadows}>
           <color attach="background" args={["#12151c"]} />
           <ambientLight intensity={0.65} />
-          <directionalLight position={[3, 5, 2]} intensity={1.1} />
+          <directionalLight
+            position={[3, 5, 2]}
+            intensity={1.1}
+            castShadow={viewDraft.shadows}
+            shadow-mapSize-width={1024}
+            shadow-mapSize-height={1024}
+          />
           <Grid infiniteGrid fadeDistance={20} sectionColor="#333" cellColor="#222" />
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.001, 0]} receiveShadow>
-            <planeGeometry args={[20, 20]} />
-            <meshStandardMaterial color="#1a1e28" transparent opacity={0.5} />
-          </mesh>
-          <OrbitControls makeDefault />
+          {viewDraft.ground ? (
+            <mesh
+              rotation={[-Math.PI / 2, 0, 0]}
+              position={[0, -0.001, 0]}
+              receiveShadow={viewDraft.shadows}
+              userData={{ gpGround: true }}
+            >
+              <planeGeometry args={[40, 40]} />
+              <meshStandardMaterial color="#1a1e28" transparent opacity={0.5} />
+            </mesh>
+          ) : null}
+          <OrbitControls makeDefault ref={controlsRef} />
           <Suspense fallback={null}>
             {isScene
               ? sceneNodes.map((n) => {
@@ -1213,6 +1514,9 @@ export function App() {
                       gizmoMode={gizmoMode}
                       snapEnabled={snapEnabled}
                       snapStep={snapStep}
+                      wireframe={wireframe}
+                      bones={showBones}
+                      shadows={viewDraft.shadows}
                       onTransformCommit={(next) => {
                         setSceneDraft((prev) =>
                           prev.map((node) =>
@@ -1243,6 +1547,11 @@ export function App() {
                     onClips={setGltfClips}
                     onError={setLoadError}
                     onDuration={setDuration}
+                    blendMs={blendMs}
+                    timeScale={timeScale}
+                    wireframe={wireframe}
+                    bones={showBones && bonesAvailable}
+                    shadows={viewDraft.shadows}
                   />
                 ) : loadError ? (
                   <LoadError message={loadError} />
@@ -1252,24 +1561,24 @@ export function App() {
         <div className="clip-bar">
           <div className="clip-list" role="listbox" aria-label="Clips">
             {canPlay ? (
-              clipsForUi.map((c) => (
+              clipsForUi.map((c, i) => (
                 <button
                   key={c}
                   type="button"
                   role="option"
                   aria-selected={clip === c}
                   className={clip === c ? "clip active" : "clip"}
-                  onClick={() => {
-                    setClip(c);
-                    setPlaying(true);
-                    setScrub(0);
-                  }}
+                  onClick={() => selectClip(c)}
                   title={
-                    clipUx.defaultClip === c
-                      ? "Default clip"
-                      : "Click to play"
+                    (clipUx.defaultClip === c ? "Default clip" : "Click to play") +
+                    (hotkeyLabel(i) ? ` · hotkey ${hotkeyLabel(i)}` : "")
                   }
                 >
+                  {hotkeyLabel(i) ? (
+                    <span className="hotkey" data-testid="clip-hotkey">
+                      {hotkeyLabel(i)}
+                    </span>
+                  ) : null}
                   {c}
                   {clipUx.defaultClip === c ? " ★" : ""}
                 </button>
@@ -1346,6 +1655,95 @@ export function App() {
             </span>
           </label>
           <span className="meta">Format: {formatLabel}</span>
+        </div>
+        <div className="clip-bar clip-bar-s3c" aria-label="Playback + overlay">
+          <label
+            className="blend"
+            title={
+              blendControlEnabled(clipsForUi)
+                ? "Crossfade between clips (0 = hard cut)"
+                : "Blend needs ≥ 2 clips"
+            }
+          >
+            Blend
+            <input
+              type="number"
+              min={0}
+              max={BLEND_MS_MAX}
+              step={50}
+              value={blendMs}
+              disabled={!canPlay || !blendControlEnabled(clipsForUi)}
+              aria-label="Clip blend ms (0–1000)"
+              onChange={(e) => setPlaybackPref({ blendMs: clampBlendMs(e.target.value) })}
+            />
+            ms
+          </label>
+          <label className="speed" title="Playback speed; clipDurations stay raw">
+            Speed
+            <input
+              type="range"
+              min={TIMESCALE_MIN}
+              max={TIMESCALE_MAX}
+              step={TIMESCALE_STEP}
+              value={timeScale}
+              disabled={!canPlay}
+              aria-label="Clip timescale 0.5–2.0"
+              onChange={(e) => setPlaybackPref({ timeScale: clampTimeScale(e.target.value) })}
+            />
+            <span className="muted">{timeScale.toFixed(1)}×</span>
+            <button
+              type="button"
+              className="tiny"
+              disabled={!canPlay || timeScale === TIMESCALE_DEFAULT}
+              onClick={() => setPlaybackPref({ timeScale: TIMESCALE_DEFAULT })}
+            >
+              Reset
+            </button>
+          </label>
+          {canPlay && clip && selected?.clipDurations?.[clip] !== undefined ? (
+            <span className="muted" title="Effective length = raw clipDurations / speed">
+              effective {effectiveDurationMs(selected.clipDurations[clip], timeScale)} ms
+            </span>
+          ) : null}
+          <span className="muted" title="Keys 1–9 select the n-th clip (ignored while typing)">
+            Keys 1–9 = clips
+          </span>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={wireframe}
+              onChange={(e) => setWireframe(e.target.checked)}
+            />
+            Wireframe
+          </label>
+          <label
+            className="overlay-toggle"
+            title={bonesAvailable ? "Show skeleton" : "No armature / bones on this asset"}
+          >
+            <input
+              type="checkbox"
+              checked={showBones && bonesAvailable}
+              disabled={!bonesAvailable}
+              onChange={(e) => setShowBones(e.target.checked)}
+            />
+            Bones
+          </label>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={viewDraft.ground}
+              onChange={(e) => setViewDraft((v) => ({ ...v, ground: e.target.checked }))}
+            />
+            Ground
+          </label>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={viewDraft.shadows}
+              onChange={(e) => setViewDraft((v) => ({ ...v, shadows: e.target.checked }))}
+            />
+            Shadows
+          </label>
         </div>
         {selected && authorPool.length > 0 && (
           <div className="clip-author" aria-label="Clip authoring">
@@ -1566,6 +1964,15 @@ export function App() {
               </button>
               <button
                 type="button"
+                className="tiny"
+                disabled={!sceneNodeId}
+                onClick={duplicateSelectedNode}
+                title="Duplicate selected node (+0.5 X, or +snap step)"
+              >
+                Duplicate
+              </button>
+              <button
+                type="button"
                 className="tiny primary"
                 disabled={sceneSaving || sceneDraft.length < 1 || !sceneDirty}
                 onClick={() => void persistScene()}
@@ -1604,6 +2011,52 @@ export function App() {
                 }}
               />
             </div>
+            <div className="scene-author-actions" aria-label="Orbit bookmarks">
+              <span className="muted">
+                Cameras ({camerasDraft.length}/{CAMERAS_MAX})
+              </span>
+              <select
+                value={cameraSel}
+                aria-label="Camera bookmark"
+                onChange={(e) => e.target.value && jumpToCamera(e.target.value)}
+              >
+                <option value="">— select view —</option>
+                {camerasDraft.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="tiny"
+                disabled={camerasDraft.length >= CAMERAS_MAX}
+                onClick={saveCameraView}
+              >
+                + Save view
+              </button>
+              <button
+                type="button"
+                className="tiny"
+                disabled={!cameraSel}
+                onClick={() => {
+                  const cur = camerasDraft.find((c) => c.id === cameraSel);
+                  const name = window.prompt("Rename view", cur?.name ?? "");
+                  if (name !== null && cameraSel) renameCamera(cameraSel, name);
+                }}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                className="tiny"
+                disabled={!cameraSel}
+                onClick={() => cameraSel && deleteCamera(cameraSel)}
+              >
+                Delete
+              </button>
+            </div>
+            {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
             <ul className="scene-node-list">
               {sceneDraft.map((n) => {
