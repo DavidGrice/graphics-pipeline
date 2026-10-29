@@ -88,3 +88,13 @@ Fail-closed if Blender missing or assert mismatches. Unit `build-test` stays Ble
   fail-closed). Verify without writing: `node scripts/refresh-goldens.mjs --check`.
 - Drift assert: `BLENDER_BIN=... npm run test:golden` (skips with an explicit reason when `BLENDER_BIN`
   unset; fails when set to a missing path; PLACEHOLDER/tampered hash ⇒ fail).
+
+### S3-C tip2 HARDEN (R1)
+
+- Non-integer / out-of-range seed → **exit 2** (`pipeline.sh` and `png_to_glb.py`); default seed `0`.
+  `run_mvp.sh` / `smoke_live.sh` accept `--seed <int>` / `--seed=<int>` (or `SEED`).
+- `golden:refresh` exports every entry **twice** in clean dirs and refuses to write unless both
+  sha256 match (`E_GOLDEN_UNSTABLE`, exit 3). Entries record `fixture`, `generatedBy`, `stableRuns: 2`.
+- Blender version ≠ recorded `blenderVersion` → `E_GOLDEN_BLENDER_VERSION` (distinct from content
+  drift `E_GOLDEN_DRIFT`); `--check` exits **2** on version mismatch, 1 on content drift.
+- `GP_GOLDEN_PATH` overrides the golden file path (tests only; tracked file never rewritten by tests).

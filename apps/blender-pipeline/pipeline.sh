@@ -3,6 +3,7 @@
 # Windows: set BLENDER_BIN to blender.exe, or add Blender to PATH.
 # MODE / SMOKE_MODE: billboard (default) | rigged — passed as --mode to png_to_glb.
 # SEED (S3-C #63): integer 0..2147483647, default 0 — passed as --seed.
+# Non-integer / out-of-range SEED → exit 2 (R1 HARDEN).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +44,7 @@ esac
 
 if [[ ! "${SEED}" =~ ^[0-9]+$ ]] || (( ${#SEED} > 10 )) || (( 10#${SEED} > 2147483647 )); then
   echo "ERROR: SEED must be an integer 0..2147483647 (got: ${SEED})" >&2
-  exit 1
+  exit 2
 fi
 
 mkdir -p "$(dirname "${OUT_GLB}")"

@@ -53,10 +53,10 @@ def _parse_seed(raw: str) -> int:
         seed = int(str(raw).strip(), 10)
     except ValueError:
         print(f"ERROR: invalid --seed {raw!r}; expected integer 0..{SEED_MAX}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(2)
     if seed < 0 or seed > SEED_MAX:
         print(f"ERROR: --seed {seed} out of range 0..{SEED_MAX}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(2)
     return seed
 
 
@@ -120,7 +120,7 @@ def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path, int]:
         if tok == "--seed":
             if i + 1 >= len(args):
                 print("ERROR: --seed requires a value", file=sys.stderr)
-                raise SystemExit(1)
+                raise SystemExit(2)
             seed_raw = args[i + 1]
             i += 2
             continue
