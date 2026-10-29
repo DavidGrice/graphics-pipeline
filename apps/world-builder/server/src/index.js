@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
-import { safeParseAsset } from "@graphics-pipeline/asset-schema";
+import { safeParseAsset, ClipUxSchema } from "@graphics-pipeline/asset-schema";
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
 import { execFile } from "node:child_process";
@@ -474,6 +474,20 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
         ? body.disabled.filter((x) => typeof x === "string")
         : undefined,
     };
+    // S3-C #1 / #2 — viewer blend + timescale prefs (validated; out of range → 400).
+    for (const key of ["blendMs", "timeScale"]) {
+      if (Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined) {
+        clipUx[key] = body[key];
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
+      return res.status(400).json({ error: "clip-ux cannot modify clipDurations (probe-only write)" });
+    }
+    const uxParsed = ClipUxSchema.safeParse(clipUx);
+    if (!uxParsed.success) {
+      const msg = uxParsed.error.issues.map((i) => i.message).join("; ");
+      return res.status(400).json({ error: msg, issues: uxParsed.error.issues });
+    }
     const col = collection();
     const existing = col
       ? await col.findOne({ id })

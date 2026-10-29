@@ -211,3 +211,89 @@ test("T1.3 OpenAPI: /api/openapi.json = JSON application/json; /api/openapi.yaml
   assert.doesNotMatch(serverSrc, /type\("text\/yaml"\)/, "no YAML-as-.json lie left in index.js");
   assert.match(serverSrc, /registerOpenApiRoutes\(app, REPO_ROOT\)/);
 });
+
+// ---------------- tip2 R1 HARDEN ----------------
+test("T1.6 #19 HARDEN: armatureCount must be 1 when hasArmature, 0 when not; shared root = one", () => {
+  const id = "550e8400-e29b-41d4-a716-4466554400c3";
+  const base = {
+    id,
+    slug: "s3c-armcount",
+    name: "armcount",
+    characterType: "prop",
+    stage: "rigged",
+    tags: [],
+    clips: ["idle", "walk", "run"],
+    formats: { glb: glbPathFor(id), preview: previewPathFor(id) },
+    rig: { hasArmature: true, hasWeights: true, boneCount: 2, armatureCount: 1 },
+    createdAt: "2026-10-29T00:00:00.000Z",
+    updatedAt: "2026-10-29T00:00:00.000Z",
+  };
+  assert.equal(safeParseAsset(base).success, true);
+  const zero = safeParseAsset({ ...base, rig: { ...base.rig, armatureCount: 0 } });
+  assert.equal(zero.success, false);
+  assert.ok(zero.error.issues.some((i) => /ARMATURE_COUNT/.test(i.message)));
+  const bb = {
+    ...base,
+    characterType: "billboard",
+    stage: "mvp-billboard",
+    clips: ["spin"],
+    rig: { hasArmature: false, hasWeights: false, armatureCount: 1 },
+  };
+  assert.equal(safeParseAsset(bb).success, false, "billboard claiming an armature rejects");
+  assert.equal(safeParseAsset({ ...bb, rig: { hasArmature: false, hasWeights: false, armatureCount: 0 } }).success, true);
+  // shared skeleton root (explicit skeleton field) across 3 skins = 1
+  const shared = structuredClone(oneArmature);
+  shared.skins = [0, 1, 2].map((k) => ({ joints: [1, 0], skeleton: 1, name: `s${k}` }));
+  assert.equal(countArmatures(shared), 1);
+});
+
+test("T1.3 OpenAPI HARDEN: info.version 0.4.0; spec paths+methods ≡ Express routes (no phantoms)", async () => {
+  const { loadOpenApi } = await import(
+    pathToFileURL(path.join(ROOT, "apps/world-builder/server/src/openapi.js")).href
+  );
+  const { json } = loadOpenApi(ROOT);
+  assert.equal(json.info.version, "0.4.0");
+  const METHODS = ["get", "post", "put", "patch", "delete"];
+  const spec = new Set();
+  for (const [p, ops] of Object.entries(json.paths)) {
+    for (const m of Object.keys(ops)) if (METHODS.includes(m)) spec.add(`${m.toUpperCase()} ${p.replace(/\{(\w+)\}/g, ":$1")}`);
+  }
+  const src = fs.readFileSync(path.join(ROOT, "apps/world-builder/server/src/index.js"), "utf8");
+  const routes = new Set();
+  for (const m of src.matchAll(/app\.(get|post|put|patch|delete)\(\s*"([^"]+)"/g)) routes.add(`${m[1].toUpperCase()} ${m[2]}`);
+  const oa = fs.readFileSync(path.join(ROOT, "apps/world-builder/server/src/openapi.js"), "utf8");
+  for (const m of oa.matchAll(/app\.(get|post|put|patch|delete)\(\s*"([^"]+)"/g)) routes.add(`${m[1].toUpperCase()} ${m[2]}`);
+  assert.deepEqual([...spec].sort(), [...routes].sort());
+});
+
+test("T1.6 #19 soft-env :8787 POST armatureCount 2 → 400 MULTI_ARMATURE", async (t) => {
+  const API = process.env.WORLD_API || "http://127.0.0.1:8787";
+  try {
+    if (!(await fetch(`${API}/api/health`)).ok) throw new Error("down");
+  } catch {
+    t.skip("world-builder not listening on :8787 (soft-env)");
+    return;
+  }
+  const id = "550e8400-e29b-41d4-a716-4466554400c4";
+  const r = await fetch(`${API}/api/assets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id,
+      slug: "s3c-multi-post",
+      name: "multi",
+      characterType: "prop",
+      stage: "rigged",
+      tags: [],
+      clips: ["idle", "walk", "run"],
+      formats: { glb: glbPathFor(id), preview: previewPathFor(id) },
+      rig: { hasArmature: true, hasWeights: true, boneCount: 4, armatureCount: 2 },
+      createdAt: "2026-10-29T00:00:00.000Z",
+      updatedAt: "2026-10-29T00:00:00.000Z",
+    }),
+  });
+  assert.equal(r.status, 400);
+  assert.match(await r.text(), /MULTI_ARMATURE/);
+  const g = await fetch(`${API}/api/assets/${id}`);
+  assert.equal(g.status, 404, "rejected asset not stored");
+});
