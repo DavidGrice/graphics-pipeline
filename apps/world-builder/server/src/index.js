@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
 import { safeParseAsset } from "@graphics-pipeline/asset-schema";
 import { validateSceneChildren } from "./sceneResolve.js";
+import { registerOpenApiRoutes } from "./openapi.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -543,14 +544,8 @@ app.get("/api/assets/:id/preview", async (req, res) => {
 });
 
 
-app.get("/api/openapi.json", (_req, res) => {
-  const yamlPath = path.join(REPO_ROOT, "docs", "openapi.yaml");
-  if (!fs.existsSync(yamlPath)) {
-    return res.status(404).json({ error: "docs/openapi.yaml missing" });
-  }
-  // Stub: return raw YAML as text with hint; full JSON convert is stretch
-  res.type("text/yaml").send(fs.readFileSync(yamlPath, "utf8"));
-});
+// S3-C openapi fix: JSON at .json (application/json), YAML at .yaml (application/yaml)
+registerOpenApiRoutes(app, REPO_ROOT);
 
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 

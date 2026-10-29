@@ -135,7 +135,17 @@ paths:
           description: Missing
   /api/openapi.json:
     get:
-      summary: This OpenAPI stub (YAML body)
+      summary: This OpenAPI document as JSON (parsed from docs/openapi.yaml)
       responses:
         "200":
-          description: openapi.yaml contents
+          description: OpenAPI JSON
+          content:
+            application/json: {}
+  /api/openapi.yaml:
+    get:
+      summary: This OpenAPI document as raw YAML (docs/openapi.yaml)
+      responses:
+        "200":
+          description: OpenAPI YAML
+          content:
+            application/yaml: {}
