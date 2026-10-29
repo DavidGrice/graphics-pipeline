@@ -241,7 +241,7 @@ test("T1.6/T1.7 soft-env: health tools + PATCH/search", async (t) => {
       tags: Array.isArray(target.tags) ? target.tags : [],
     }),
   });
-  assert.ok(patch.ok, await patch.text());
+  assert.ok(patch.ok, await patch.clone().text());
   const updated = await patch.json();
   assert.ok(
     updated.assetSchemaVersion == null ||
