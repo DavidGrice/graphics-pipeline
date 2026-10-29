@@ -15,6 +15,8 @@ import {
   loadGolden,
   validateGolden,
   assertGoldenMatch,
+  assertBlenderVersion,
+  verifyGoldens,
   requireBlenderBin,
   blenderVersion,
   makeFixturePng,
@@ -88,7 +90,7 @@ test("T1.7 BLENDER_BIN fail-closed: unset/missing → named error; refresh scrip
   assert.match(r.stderr, /E_BLENDER_BIN_UNSET/);
 });
 
-test("T1.6 #63 pipeline.sh rejects non-integer SEED before Blender", () => {
+test("T1.6 #63 pipeline.sh rejects non-integer SEED before Blender (exit 2)", () => {
   const dir = tmpDir("gp-seed-bad-");
   try {
     const png = makeFixturePng(dir);
@@ -97,7 +99,7 @@ test("T1.6 #63 pipeline.sh rejects non-integer SEED before Blender", () => {
         env: { ...process.env, BLENDER_BIN: "/bin/true", SEED: bad },
         encoding: "utf8",
       });
-      assert.equal(r.status, 1, `SEED=${bad} should exit 1`);
+      assert.equal(r.status, 2, `SEED=${bad} should exit 2`);
       assert.match(r.stderr, /SEED must be an integer/);
     }
   } finally {
@@ -108,30 +110,49 @@ test("T1.6 #63 pipeline.sh rejects non-integer SEED before Blender", () => {
 test("T1.2 drift assert: live Blender GLB sha256 == golden for every entry", (t) => {
   const bin = blenderOrSkip(t);
   if (!bin) return;
-  const golden = loadGolden();
-  const version = blenderVersion(bin);
-  if (version !== golden.billboard.blenderVersion) {
-    assert.fail(
-      `Blender ${version} ≠ golden Blender ${golden.billboard.blenderVersion} — refresh goldens intentionally`,
-    );
-  }
   const dir = tmpDir();
   try {
-    const png = makeFixturePng(dir);
-    assert.equal(sha256File(png), golden.billboard.inputSha256, "fixture PNG drift");
-    for (const [key, spec] of Object.entries(GOLDEN_SPECS)) {
-      const { sha256 } = generateGlb({
-        blenderBin: bin,
-        mode: spec.mode,
-        seed: spec.seed,
-        inPng: png,
-        outGlb: path.join(dir, spec.file),
-      });
-      assertGoldenMatch(key, golden[key].sha256, sha256);
-    }
+    const { blenderVersion: live, results } = verifyGoldens({ blenderBin: bin, golden: loadGolden(), workDir: dir });
+    assert.equal(live, loadGolden().billboard.blenderVersion);
+    assert.deepEqual(Object.keys(results).sort(), Object.keys(GOLDEN_SPECS).sort());
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("T1.2 live tamper matrix (BLENDER_BIN set): hash→DRIFT, version→BLENDER_VERSION, PLACEHOLDER/non-hex→fail", (t) => {
+  const bin = blenderOrSkip(t);
+  if (!bin) return;
+  const run = (mutate) => {
+    const g = structuredClone(loadGolden());
+    mutate(g);
+    const dir = tmpDir();
+    try {
+      verifyGoldens({ blenderBin: bin, golden: g, workDir: dir });
+      return null;
+    } catch (e) {
+      return e;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const drift = run((g) => {
+    g.rigged.sha256 = (g.rigged.sha256[0] === "0" ? "1" : "0") + g.rigged.sha256.slice(1);
+  });
+  assert.equal(drift?.code, "E_GOLDEN_DRIFT", String(drift));
+  const ver = run((g) => {
+    for (const k of Object.keys(g)) g[k].blenderVersion = "9.9.9";
+  });
+  assert.equal(ver?.code, "E_GOLDEN_BLENDER_VERSION", String(ver));
+  assert.doesNotMatch(ver.message, /E_GOLDEN_DRIFT/);
+  const ph = run((g) => {
+    g.billboard.sha256 = "PLACEHOLDER_REFRESH_WITH_BLENDER";
+  });
+  assert.equal(ph?.code, "E_GOLDEN_PLACEHOLDER", String(ph));
+  const hex = run((g) => {
+    g.billboard.sha256 = "zz".repeat(32);
+  });
+  assert.equal(hex?.code, "E_GOLDEN_MALFORMED", String(hex));
 });
 
 test("T1.6 #63 --seed: same seed ⇒ identical sha256; different seed ⇒ different", (t) => {
@@ -152,6 +173,13 @@ test("T1.6 #63 --seed: same seed ⇒ identical sha256; different seed ⇒ differ
       const zero = run(mode, 0, 1);
       assert.equal(zero, loadGolden()[mode].sha256, `${mode}: seed 0 == canonical golden`);
     }
+    // seed default 0: no SEED env / no --seed ⇒ canonical golden bytes
+    const env = { ...process.env, BLENDER_BIN: bin, MODE: "billboard" };
+    delete env.SEED;
+    delete env.SMOKE_MODE;
+    const dflt = path.join(dir, "default-seed.glb");
+    execFileSync("bash", [PIPELINE_SH, png, dflt], { env, stdio: "ignore" });
+    assert.equal(sha256File(dflt), loadGolden().billboard.sha256, "default seed must be 0");
     // --seed flag directly on png_to_glb.py (not via env) is honored + invalid rejected
     const out = path.join(dir, "direct.glb");
     execFileSync(bin, [
@@ -164,8 +192,84 @@ test("T1.6 #63 --seed: same seed ⇒ identical sha256; different seed ⇒ differ
       "--", png, path.join(dir, "bad.glb"), "--seed", "nope",
     ], { encoding: "utf8" });
     assert.match(`${bad.stdout}${bad.stderr}`, /invalid --seed/);
+    assert.equal(bad.status, 2, "non-integer --seed must exit 2");
     assert.ok(!fs.existsSync(path.join(dir, "bad.glb")));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- Fake-Blender harness (no real Blender): version mismatch + two-run stability ----
+function fakeBlender(dir, { version = "5.2.3", unstable = false } = {}) {
+  const p = path.join(dir, "fake-blender");
+  fs.writeFileSync(
+    p,
+    `#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then echo "Blender ${version}"; exit 0; fi
+args=(); seen=0
+for a in "$@"; do if [[ $seen -eq 1 ]]; then args+=("$a"); fi; [[ "$a" == "--" ]] && seen=1; done
+out="\${args[1]}"
+if [[ "${unstable ? "1" : "0"}" == "1" ]]; then extra="$RANDOM$RANDOM$$"; else extra="stable"; fi
+printf 'glTF-fake-%s-%s' "\${args[*]:2}" "$extra" > "$out"
+`,
+    { mode: 0o755 },
+  );
+  return p;
+}
+
+function runRefresh(args, env) {
+  return spawnSync(process.execPath, ["scripts/refresh-goldens.mjs", ...args], {
+    cwd: path.resolve(path.dirname(fileURLToPathSafe()), ".."),
+    env: { ...process.env, ...env },
+    encoding: "utf8",
+  });
+}
+function fileURLToPathSafe() {
+  return new URL(import.meta.url).pathname;
+}
+
+test("T1.2 assertBlenderVersion: mismatch → E_GOLDEN_BLENDER_VERSION (distinct from drift)", () => {
+  assert.doesNotThrow(() => assertBlenderVersion("billboard", "5.2.3", "5.2.3"));
+  assert.throws(
+    () => assertBlenderVersion("billboard", "5.2.3", "5.3.0"),
+    (e) => e.code === "E_GOLDEN_BLENDER_VERSION" && !/DRIFT/.test(e.message) && /5\.3\.0/.test(e.message),
+  );
+});
+
+test("T1.2 golden:refresh --check: Blender version mismatch → exit 2 + E_GOLDEN_BLENDER_VERSION (not DRIFT)", () => {
+  const dir = tmpDir("gp-fake-ver-");
+  try {
+    const bin = fakeBlender(dir, { version: "9.9.9" });
+    const r = runRefresh(["--check"], { BLENDER_BIN: bin });
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /E_GOLDEN_BLENDER_VERSION/);
+    assert.doesNotMatch(r.stderr, /DRIFT/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("T1.2 golden:refresh runs each export twice; unstable → exit 3, nothing written", () => {
+  const dir = tmpDir("gp-fake-unstable-");
+  try {
+    const target = path.join(dir, "hashes.json");
+    fs.copyFileSync(GOLDEN_PATH, target);
+    const before = fs.readFileSync(target, "utf8");
+    const r = runRefresh([], { BLENDER_BIN: fakeBlender(dir, { unstable: true }), GP_GOLDEN_PATH: target });
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.stderr, /E_GOLDEN_UNSTABLE/);
+    assert.equal(fs.readFileSync(target, "utf8"), before, "must not write a flaky hash");
+
+    // stable fake → writes (to the tmp override only), records stableRuns=2
+    const ok = runRefresh([], { BLENDER_BIN: fakeBlender(dir, { unstable: false }), GP_GOLDEN_PATH: target });
+    assert.equal(ok.status, 0, ok.stderr);
+    const written = JSON.parse(fs.readFileSync(target, "utf8"));
+    assert.equal(written.billboard.stableRuns, 2);
+    assert.equal(written.billboard.generatedBy, "npm run golden:refresh");
+    assert.match(written.billboard.sha256, /^[0-9a-f]{64}$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // tracked file untouched
+  assert.deepEqual(validateGolden(loadGolden()), []);
 });

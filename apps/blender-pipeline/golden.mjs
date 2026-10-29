@@ -15,7 +15,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, "../..");
-export const GOLDEN_PATH = path.join(REPO_ROOT, "testdata", "golden", "hashes.json");
+/** GP_GOLDEN_PATH override lets tests exercise refresh without touching the tracked file. */
+export const GOLDEN_PATH =
+  process.env.GP_GOLDEN_PATH || path.join(REPO_ROOT, "testdata", "golden", "hashes.json");
 export const PIPELINE_SH = path.join(__dirname, "pipeline.sh");
 export const FIXTURE_SCRIPT = path.join(REPO_ROOT, "scripts", "ensure-smoke-png.mjs");
 
@@ -82,6 +84,74 @@ export function assertGoldenMatch(key, expected, actual) {
       `${key}: expected ${expected} got ${actual} — refresh intentionally via scripts/refresh-goldens.mjs`,
     );
   }
+}
+
+/** Version drift ≠ content drift: distinct E_GOLDEN_BLENDER_VERSION. */
+export function assertBlenderVersion(key, recorded, live) {
+  if (recorded !== live) {
+    throw new GoldenError(
+      "E_GOLDEN_BLENDER_VERSION",
+      `${key}: golden recorded Blender ${recorded} but live BLENDER_BIN is ${live} — not a content drift; refresh goldens on the pinned Blender`,
+    );
+  }
+}
+
+/**
+ * Full live verification (fail-closed): structure (PLACEHOLDER/non-hex) →
+ * Blender version → fixture input → per-entry sha256. Throws GoldenError.
+ */
+export function verifyGoldens({ blenderBin, golden, workDir }) {
+  const errs = validateGolden(golden);
+  if (errs.length) {
+    const code = errs.some((e) => e.includes("E_GOLDEN_PLACEHOLDER"))
+      ? "E_GOLDEN_PLACEHOLDER"
+      : "E_GOLDEN_MALFORMED";
+    throw new GoldenError(code, errs.join("; "));
+  }
+  const live = blenderVersion(blenderBin);
+  for (const key of Object.keys(GOLDEN_SPECS)) {
+    assertBlenderVersion(key, golden[key].blenderVersion, live);
+  }
+  const png = makeFixturePng(workDir);
+  const inSha = sha256File(png);
+  for (const key of Object.keys(GOLDEN_SPECS)) {
+    if (golden[key].inputSha256 !== inSha) {
+      throw new GoldenError("E_GOLDEN_FIXTURE", `${key}: fixture PNG sha256 ${inSha} ≠ recorded ${golden[key].inputSha256}`);
+    }
+  }
+  const results = {};
+  for (const [key, spec] of Object.entries(GOLDEN_SPECS)) {
+    const { sha256 } = generateGlb({
+      blenderBin,
+      mode: spec.mode,
+      seed: spec.seed,
+      inPng: png,
+      outGlb: path.join(workDir, spec.file),
+    });
+    assertGoldenMatch(key, golden[key].sha256, sha256);
+    results[key] = sha256;
+  }
+  return { blenderVersion: live, results };
+}
+
+/**
+ * Export twice in separate clean dirs; refuse unless byte-identical (R1 HARDEN).
+ * Throws E_GOLDEN_UNSTABLE on mismatch.
+ */
+export function generateStable({ blenderBin, mode, seed, inPng, workDir, file }) {
+  const a = path.join(workDir, "run1");
+  const b = path.join(workDir, "run2");
+  fs.mkdirSync(a, { recursive: true });
+  fs.mkdirSync(b, { recursive: true });
+  const r1 = generateGlb({ blenderBin, mode, seed, inPng, outGlb: path.join(a, file) });
+  const r2 = generateGlb({ blenderBin, mode, seed, inPng, outGlb: path.join(b, file) });
+  if (r1.sha256 !== r2.sha256) {
+    throw new GoldenError(
+      "E_GOLDEN_UNSTABLE",
+      `${file} mode=${mode} seed=${seed}: two clean exports differ (${r1.sha256} vs ${r2.sha256}) — refusing to write a flaky hash`,
+    );
+  }
+  return r1.sha256;
 }
 
 /** Fail-closed BLENDER_BIN resolution (no PATH fallback). */
