@@ -1,0 +1,10 @@
+# S3-E E3 #144 — gitleaks config for `npm run scan:secrets`.
+# Default gitleaks rules; the only allowlisted paths are deliberate test fixtures.
+title = "graphics-pipeline"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberate fake secrets in test fixtures only"
+paths = ['''^tests/fixtures/''']
