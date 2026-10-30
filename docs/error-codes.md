@@ -17,12 +17,15 @@ alphabetical within a group. A code can appear in more than one group (e.g. API 
 
 | code | HTTP / exit | where raised | meaning | fix hint |
 |---|---|---|---|---|
+| `CONFIG_INVALID` | exit 1 (API start) | `server/src/index.js` startup via `server/src/security.js` (`RATE_LIMIT_PER_MIN`, `CORS_ORIGINS`, `TRUST_PROXY`, `MAX_GLB_MB`) | Fail-closed start: an env var is invalid. The one-line `FATAL CONFIG_INVALID: <VAR> …` names the variable, never its value | Fix the named variable (`RATE_LIMIT_PER_MIN` integer ≥ 1; `CORS_ORIGINS` exact `scheme://host[:port]` origins, never `*`; `TRUST_PROXY` 0/1) |
+| `CORS_ORIGIN_DENIED` | 403 | `server/src/security.js` `corsAllowlist` (preflight `OPTIONS` only) | Preflight from an origin not in `CORS_ORIGINS`; no `Access-Control-Allow-Origin` header. Simple requests from such an origin are processed but get no ACAO | Add the exact origin to `CORS_ORIGINS` (default `http://localhost:5173,http://127.0.0.1:5173`) |
 | `INTERNAL` | 500 | `server/src/errors.js` `sendInternal` (sendFile errors, last-resort handler) | Unexpected server error; body text is always the fixed string "internal error" | Read the API log line `[world-builder] INTERNAL <METHOD> <route> code=…` for the real cause |
 | `INVALID_JSON` | 400 | `server/src/index.js` body-parser error middleware | Request body is not valid JSON | Send `Content-Type: application/json` with a well-formed body |
 | `KRITA_DOWN` | 503 | `GET /api/health` with strict Krita health | Strict Krita check failed; body has no tool paths and no `dataRoot` | Start Krita + the bridge, or unset `HEALTH_STRICT_KRITA` |
 | `NOT_FOUND` | 404 | unknown asset id, unknown route, `/api/openapi.*` | Resource or route does not exist | Check the id / path; list with `GET /api/assets` |
 | `OPENAPI_PARSE` | 500 | `server/src/openapi.js` | `docs/openapi.yaml` failed to parse | Fix the YAML (the S3-C OpenAPI gate test shows the parse error) |
 | `PAYLOAD_TOO_LARGE` | 413 | body-parser error middleware | JSON body larger than the express limit | Send a smaller body; GLBs go on disk, not in JSON |
+| `RATE_LIMITED` | 429 | `server/src/security.js` `rateLimiter` (POST/PUT/PATCH/DELETE under `/api/`, per client IP) | Token bucket of `RATE_LIMIT_PER_MIN` (default 60) is empty; body `{retryAfterSec}` + `Retry-After` header (whole seconds ≥ 1). GET/HEAD/OPTIONS never throttled. Client = socket address; `X-Forwarded-For` only with `TRUST_PROXY=1`, so behind the Vite dev proxy every browser shares one 127.0.0.1 bucket (accepted) | Wait `retryAfterSec` (the UI shows a countdown); raise `RATE_LIMIT_PER_MIN` for bulk imports |
 | `VALIDATION` | 400 | POST/PATCH asset, list query (`stage`, `sort`, `limit` 1–100), schema issues without a specific code | Body or query failed validation; `{issues}` carries Zod issues | Fix the field named in `issues[].path` / `error` |
 
 ### 2. Scene / V-codes
@@ -82,6 +85,7 @@ Warn-only entries in `importMeta.warnings[]` (`{code, message?, detail?, clip?}`
 | `GLB_CORRUPT` | exit 5 | `register_asset.mjs` | Corrupt / truncated / bad-magic GLB; one clean `ERROR GLB_CORRUPT:` line, no stack | Re-export the GLB |
 | `GLB_TOO_LARGE` | exit 4 | `register_asset.mjs`, `pipeline.sh` | GLB over `MAX_GLB_MB`; not probed, not registered | Shrink the GLB or raise `MAX_GLB_MB` |
 | `PATH_OUTSIDE_INBOX` | exit 2 | `run_mvp.sh` | Bad slug (not kebab) or inbox entry resolving outside `data/inbox` | Use a kebab slug and a real file under `data/inbox/` |
+| `RATE_LIMITED` | exit 1 | `register_asset.mjs` | API answered 429; prints `retry in <N>s`; nothing retried, no files left behind | Re-run after N seconds (or raise `RATE_LIMIT_PER_MIN` on the API) |
 | `SLUG_CLASH` | exit 1 | `register_asset.mjs` | Slug owned by another id; prints `retry with --slug <suggested>`; no files left behind | Re-run with the suggested slug |
 | (no code) | exit 2 | `pipeline.sh` / `run_mvp.sh` `--seed`, `register_asset.mjs`, `pipeline.sh` | Bad `SEED` / `--seed` (non-integer or out of range) or bad `MAX_GLB_MB` (not an integer ≥ 1) | Pass a valid integer |
 

@@ -2,7 +2,6 @@
  * Express API stub — Mongo metadata + local disk for GLB/preview.
  * Sprint 1 surface from Designer contract.
  */
-import cors from "cors";
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -35,6 +34,14 @@ function normaliseAltText(raw) {
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
 import { sendError, sendInternal, sendValidation } from "./errors.js";
+import {
+  ConfigError,
+  corsAllowlist,
+  parseCorsOrigins,
+  parseRateLimitPerMin,
+  parseTrustProxy,
+  rateLimiter,
+} from "./security.js";
 import {
   resolveUnder,
   PathGuardError,
@@ -113,11 +120,22 @@ const ASSETS_DIR = path.join(DATA_ROOT, "assets");
 const INBOX_ROOT = path.join(DATA_ROOT, "inbox");
 
 // S3-D #76 — MAX_GLB_MB (default 100, integer ≥ 1). Invalid → refuse to start (fail-closed).
+// S3-E: every fail-closed start error is CONFIG_INVALID and names the variable, never its value.
 let MAX_GLB_MB;
+let RATE_LIMIT_PER_MIN;
+let CORS_ORIGINS;
+let TRUST_PROXY;
 try {
-  MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  try {
+    MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  } catch {
+    throw new ConfigError("MAX_GLB_MB", "must be an integer >= 1");
+  }
+  RATE_LIMIT_PER_MIN = parseRateLimitPerMin(process.env.RATE_LIMIT_PER_MIN);
+  CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGINS);
+  TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
 } catch (err) {
-  console.error(`[world-builder] FATAL ${err.message}`);
+  console.error(`[world-builder] FATAL ${err instanceof ConfigError ? err.message : "CONFIG_INVALID: startup config"}`);
   process.exit(1);
 }
 const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
@@ -195,7 +213,10 @@ function collection() {
 }
 
 const app = express();
-app.use(cors({ origin: true }));
+// S3-E #145 — exact-origin allowlist (was cors({origin:true}) = reflect any Origin).
+app.use(corsAllowlist(CORS_ORIGINS));
+// S3-E #139 — token bucket on mutating /api routes; GET/HEAD/OPTIONS never throttled.
+app.use(rateLimiter({ perMin: RATE_LIMIT_PER_MIN, trustProxy: TRUST_PROXY }));
 app.use(express.json({ limit: "2mb" }));
 // S3-D R1 §0 — body-parser failures use the same envelope (no HTML error pages).
 app.use((err, _req, res, next) => {
@@ -817,5 +838,5 @@ fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 await connectMongo();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB})`);
+  console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB} RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN} CORS_ORIGINS=${CORS_ORIGINS.length})`);
 });
