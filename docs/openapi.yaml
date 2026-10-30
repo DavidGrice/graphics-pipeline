@@ -41,11 +41,22 @@ paths:
           name: tag
           schema: { type: string }
           description: Repeatable; AND across values
+        - in: query
+          name: sort
+          schema: { type: string, enum: ["-createdAt", createdAt] }
+          description: S3-D #94 - order by createdAt; assets without createdAt (legacy) always last
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: S3-D #94 - cap after filter/sort; outside 1..100 -> 400 VALIDATION
       responses:
         "200":
           description: Asset array
         "400":
-          description: Unknown stage
+          description: VALIDATION - unknown stage, bad sort or limit outside 1..100
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     post:
       summary: Register / upsert asset (schema + scene V4 gates)
       description: |
@@ -56,6 +67,10 @@ paths:
         #49/#97 - importMeta.warnings[] {code, message?, detail?, clip?} is warn-only
         (PNG_ALPHA_PREMULT_SUSPECT, IDLE_TPOSE_SUSPECT); a humanoid whose only idle carries
         IDLE_TPOSE_SUSPECT fails the humanoid clips gate (400 VALIDATION).
+        S3-D #127 - a slug already owned by a different id -> 409 SLUG_CLASH {slug, existingId,
+        suggestedSlug} (first free `<slug>-2`, `-3`, ...); same id + same slug stays an idempotent upsert.
+        #88 - optional altText (trimmed, 1-280; "" omitted) -> >280 is 400 ALT_TEXT_TOO_LONG.
+        #94 - createdAt/updatedAt default to now (ISO) when omitted.
       requestBody:
         required: true
         content:
@@ -66,10 +81,15 @@ paths:
         "201":
           description: Created/upserted
         "400":
-          description: VALIDATION / MULTI_ARMATURE / SCENE_CAMERAS_MAX / SCENE_RESOLVE / PATH_OUTSIDE_INBOX
+          description: VALIDATION / MULTI_ARMATURE / SCENE_CAMERAS_MAX / SCENE_RESOLVE / PATH_OUTSIDE_INBOX / ALT_TEXT_TOO_LONG
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: SLUG_CLASH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SlugClash" }
         "413":
           description: GLB_TOO_LARGE
           content:
@@ -89,12 +109,14 @@ paths:
         "404":
           description: Not found
     patch:
-      summary: Patch metadata (name/tags/clipTags/clipUx/scene/importMeta/license)
+      summary: Patch metadata (name/tags/clipTags/clipUx/scene/importMeta/license/altText)
       description: |
         Forbidden - formats, clips, rig, stage, id, slug, clipDurations.
         importMeta is merged. assetSchemaVersion cannot decrement.
         S3-C - scene.view {ground?, shadows?} and scene.cameras (max 16; finite
         position/target; name 1-40; fov 10-120) validated; 17th camera or NaN -> 400.
+        S3-D #88 - altText is trimmed; "" or null clears it; more than 280 characters ->
+        400 ALT_TEXT_TOO_LONG {length, max}; a non-string -> 400 VALIDATION.
       parameters:
         - in: path
           name: id
@@ -109,7 +131,10 @@ paths:
         "200":
           description: Updated
         "400":
-          description: Validation / forbidden field
+          description: VALIDATION / PATCH_FORBIDDEN_FIELD / SCHEMA_VERSION_DECREMENT / ALT_TEXT_TOO_LONG
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: Not found
     delete:
@@ -221,3 +246,12 @@ components:
           properties:
             sizeBytes: { type: integer }
             maxBytes: { type: integer }
+    SlugClash:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [slug, existingId, suggestedSlug]
+          properties:
+            slug: { type: string }
+            existingId: { type: string }
+            suggestedSlug: { type: string }
