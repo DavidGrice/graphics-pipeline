@@ -93,6 +93,20 @@ paths:
           description: Validation / forbidden field
         "404":
           description: Not found
+    delete:
+      summary: Delete asset metadata (S3-C tip3; data files untouched)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+        "409":
+          description: Still referenced by a scene
   /api/assets/{id}/clip-ux:
     patch:
       summary: Patch clipUx only

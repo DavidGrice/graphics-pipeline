@@ -509,6 +509,35 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
   }
 });
 
+/**
+ * S3-C tip3 — DELETE /api/assets/:id (metadata only; test cleanup + orphan removal).
+ * 409 when a stage=scene asset still references it (keeps V4 integrity).
+ * Never deletes data/** files (media lifecycle stays with the pipeline).
+ */
+app.delete("/api/assets/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const col = collection();
+    const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
+    if (!existing) return res.status(404).json({ error: "not found" });
+    const all = col ? await col.find({ stage: "scene" }).toArray() : [...memoryAssets.values()];
+    const refs = all
+      .filter((d) => d.stage === "scene" && d.id !== id)
+      .filter((d) =>
+        (d.scene?.nodes ?? []).some((n) => n.assetId === id || n.assetId === existing.slug),
+      )
+      .map((d) => d.id);
+    if (refs.length) {
+      return res.status(409).json({ error: `asset referenced by scene(s): ${refs.join(", ")}`, refs });
+    }
+    if (col) await col.deleteOne({ id });
+    else memoryAssets.delete(id);
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
 app.get("/api/assets/:id/file", async (req, res) => {
   try {
     const format = (req.query.format || "glb").toString();
