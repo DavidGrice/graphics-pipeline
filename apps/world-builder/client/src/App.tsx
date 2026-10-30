@@ -32,6 +32,13 @@ import {
   type ThemePref,
 } from "./s3dPrefs";
 import {
+  parseRateLimited,
+  rateLimitMessage,
+  remainingSec,
+  timingsTitle,
+  type TimingsMirror,
+} from "./s3eRateLimit";
+import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
   TIMESCALE_DEFAULT,
@@ -89,7 +96,12 @@ type ImportMetaView = {
   humanoidPngApproved?: boolean;
   /** S3-D #49/#97 warn-only import warnings */
   warnings?: Array<{ code: string; message?: string }>;
+  /** S3-E #66 — optional mirror of timings.json */
+  timingsMs?: TimingsMirror;
 };
+
+/** S3-E #139 — which control a 429 countdown is shown under. */
+type RateLimitWhere = "register" | "alt" | "actionMap" | "scene";
 
 type AssetMeta = {
   id: string;
@@ -747,6 +759,10 @@ export function App() {
   const [altDraft, setAltDraft] = useState("");
   const [altSaving, setAltSaving] = useState(false);
   const [altError, setAltError] = useState<string | null>(null);
+  // S3-E #139 — one shared cooldown (the API bucket is per client); inline countdown, no auto-retry.
+  const [rlUntil, setRlUntil] = useState(0);
+  const [rlWhere, setRlWhere] = useState<RateLimitWhere | null>(null);
+  const [rlNow, setRlNow] = useState(() => Date.now());
   // S3-D #86/#90 — session-only overrides (not persisted, no schema)
   const [themePref, setThemePref] = useState<ThemePref>("system");
   const [motionPref, setMotionPref] = useState<MotionPref>("system");
@@ -849,6 +865,33 @@ export function App() {
     setAltError(null);
   }, [selected?.id, selected?.altText]);
 
+  useEffect(() => {
+    if (rlUntil <= Date.now()) return;
+    const t = window.setInterval(() => {
+      const now = Date.now();
+      setRlNow(now);
+      if (now >= rlUntil) window.clearInterval(t);
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [rlUntil]);
+  const rlLeft = remainingSec(rlUntil, rlNow);
+  /** true (and countdown armed) when `r` is a 429 RATE_LIMITED. */
+  const noteRateLimit = (r: Response, text: string, where: RateLimitWhere): boolean => {
+    const sec = parseRateLimited(r.status, text, r.headers.get("Retry-After"));
+    if (sec == null) return false;
+    const now = Date.now();
+    setRlNow(now);
+    setRlUntil(now + sec * 1000);
+    setRlWhere(where);
+    return true;
+  };
+  const rateLimitNote = (where: RateLimitWhere) =>
+    rlLeft > 0 && rlWhere === where ? (
+      <p className="err rate-limited" role="status" aria-live="polite" data-testid="rate-limited">
+        {rateLimitMessage(rlLeft)}
+      </p>
+    ) : null;
+
   async function saveAltText() {
     if (!selected) return;
     const st = altTextState(altDraft);
@@ -862,6 +905,7 @@ export function App() {
         body: JSON.stringify({ altText: st.trimmed }),
       });
       const text = await r.text();
+      if (noteRateLimit(r, text, "alt")) return;
       if (!r.ok) {
         let msg = `${r.status}`;
         try {
@@ -1227,6 +1271,7 @@ export function App() {
         body: JSON.stringify({ importMeta }),
       });
       const textBody = await r.text();
+      if (noteRateLimit(r, textBody, "actionMap")) return;
       if (!r.ok) throw new Error(`${r.status} ${textBody}`);
       const updated = JSON.parse(textBody) as AssetMeta;
       setAssets((list) =>
@@ -1280,6 +1325,7 @@ export function App() {
         body: JSON.stringify({ scene: body.scene }),
       });
       const textBody = await r.text();
+      if (noteRateLimit(r, textBody, "scene")) return;
       if (!r.ok) throw new Error(`${r.status} ${textBody}`);
       const updated = JSON.parse(textBody) as AssetMeta;
       setAssets((list) =>
@@ -1358,6 +1404,7 @@ export function App() {
         body: JSON.stringify(body),
       });
       const text = await r.text();
+      if (noteRateLimit(r, text, "register")) return;
       // S3-D #127 — keep the form and its values; show the inline clash + suggestion
       const clash = parseSlugClash(r.status, text);
       if (clash) {
@@ -1527,11 +1574,14 @@ export function App() {
               {recent.map((a) => {
                 const b = characterTypeBadge(a);
                 const n = warningsCount(a);
+                // S3-D #94 + S3-E #66 — total import time tooltip when the timings mirror exists
+                const tt = timingsTitle(a.importMeta?.timingsMs);
                 return (
                   <li key={a.id}>
                     <button
                       type="button"
                       className="recent-row"
+                      title={tt ?? undefined}
                       data-testid="recent-import-row"
                       onClick={() => {
                         const live = assets.find((x) => x.id === a.id) ?? a;
@@ -1588,7 +1638,8 @@ export function App() {
                 </button>
               </div>
             )}
-            <button type="button" onClick={submitRegister}>
+            {rateLimitNote("register")}
+            <button type="button" data-testid="register-submit" disabled={rlLeft > 0} onClick={submitRegister}>
               POST /api/assets
             </button>
           </div>
@@ -1985,13 +2036,14 @@ export function App() {
                 <button
                   type="button"
                   className="tiny primary"
-                  disabled={actionMapSaving || !actionMapDirty}
+                  disabled={actionMapSaving || !actionMapDirty || rlLeft > 0}
                   onClick={() => void persistActionMap()}
                 >
                   {actionMapSaving ? "Saving…" : "Save actionMap"}
                 </button>
               </div>
               {actionMapError && <p className="err">{actionMapError}</p>}
+              {rateLimitNote("actionMap")}
             </div>
             {selected.license && (
               <div className="import-meta-row">
@@ -2027,7 +2079,7 @@ export function App() {
                       type="button"
                       className="tiny primary"
                       data-testid="alt-text-save"
-                      disabled={altSaving || st.over || !dirty}
+                      disabled={altSaving || st.over || !dirty || rlLeft > 0}
                       title={st.over ? `Max ${ALT_TEXT_MAX} characters` : "PATCH altText (empty clears)"}
                       onClick={() => void saveAltText()}
                     >
@@ -2035,6 +2087,7 @@ export function App() {
                     </button>
                   </div>
                   {altError && <p className="err">{altError}</p>}
+                  {rateLimitNote("alt")}
                 </div>
               );
             })()}
@@ -2087,7 +2140,8 @@ export function App() {
               <button
                 type="button"
                 className="tiny primary"
-                disabled={sceneSaving || sceneDraft.length < 1 || !sceneDirty}
+                data-testid="scene-save"
+                disabled={sceneSaving || sceneDraft.length < 1 || !sceneDirty || rlLeft > 0}
                 onClick={() => void persistScene()}
               >
                 {sceneSaving ? "Saving…" : sceneDirty ? "Save" : "Saved"}
@@ -2171,6 +2225,7 @@ export function App() {
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
+            {rateLimitNote("scene")}
             {(() => {
               // S3-D #127 / R1 §6 — V4a ambiguity links to the conflicting assets
               const amb = ambiguousSlugOf(sceneSaveError);
