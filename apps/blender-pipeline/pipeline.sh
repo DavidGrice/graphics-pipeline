@@ -26,7 +26,7 @@ if ! command -v "${BLENDER_BIN}" >/dev/null 2>&1 && [[ ! -x "${BLENDER_BIN}" ]];
   echo "ERROR: Blender binary not found: ${BLENDER_BIN}" >&2
   echo "Install Blender 5.2.3 LTS (recommended) or any >= 4.2." >&2
   echo "Set BLENDER_BIN to the absolute path of the blender executable." >&2
-  echo "Windows example: set BLENDER_BIN=C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" >&2
+  printf '%s\n' "Windows example: set BLENDER_BIN=C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" >&2
   exit 127
 fi
 

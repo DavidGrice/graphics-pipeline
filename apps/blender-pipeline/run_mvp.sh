@@ -30,7 +30,16 @@ fi
 INBOX_ROOT="${REPO}/data/inbox"
 INBOX_DIR="${INBOX_ROOT}/${SLUG}"
 mkdir -p "${INBOX_DIR}"
-PNG="$(ls -1t "${INBOX_DIR}"/*.png 2>/dev/null | head -1 || true)"
+# newest *.png by mtime, without parsing ls (SC2012); empty when there is none
+newest_png() {
+  local f best=""
+  for f in "$1"/*.png; do
+    [[ -e "${f}" ]] || continue
+    if [[ -z "${best}" || "${f}" -nt "${best}" ]]; then best="${f}"; fi
+  done
+  printf '%s' "${best}"
+}
+PNG="$(newest_png "${INBOX_DIR}")"
 # realpath containment: a symlinked slug dir or PNG escaping data/inbox → exit 2
 inbox_guard() {
   local root real
@@ -51,7 +60,11 @@ if [[ -z "${PNG}" ]]; then
   fi
   echo "No inbox PNG for ${SLUG}; writing demo PNG via mcp-krita smoke…"
   (cd "${REPO}" && npm run smoke:demo -w @graphics-pipeline/mcp-krita -- --slug="${SLUG}" >/dev/null)
-  PNG="$(ls -1t "${INBOX_DIR}"/*.png | head -1)"
+  PNG="$(newest_png "${INBOX_DIR}")"
+  if [[ -z "${PNG}" ]]; then
+    echo "ERROR: smoke:demo wrote no PNG under the inbox" >&2
+    exit 1
+  fi
   inbox_guard "${PNG}"
 fi
 
@@ -70,7 +83,7 @@ if [[ "${SMOKE_LIVE}" == "1" ]]; then
   if [[ "${blender_ok}" -ne 1 ]]; then
     echo "ERROR: SMOKE_LIVE=1 — Blender binary not found: ${BLENDER_BIN}" >&2
     echo "Install Blender 5.2.3 LTS and set BLENDER_BIN (fail-closed; no demo GLB)." >&2
-    echo "Windows example: set BLENDER_BIN=C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" >&2
+    printf '%s\n' "Windows example: set BLENDER_BIN=C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe" >&2
     exit 127
   fi
   "${SCRIPT_DIR}/pipeline.sh" "${PNG}" "${OUT_GLB}"

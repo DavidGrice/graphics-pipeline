@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from zipfile import ZipInfo, ZIP_DEFLATED
 root = Path("$ROOT")
-out = root / "graphics_fp_bridge.zip"
+out = Path("$OUT")
 if out.exists():
     out.unlink()
 with zipfile.ZipFile(out, "w", compression=ZIP_DEFLATED) as zf:
