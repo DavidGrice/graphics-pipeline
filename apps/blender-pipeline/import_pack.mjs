@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { unzipStore } from "./zip_store.mjs";
-import { cachedProbe } from "./probe_cache.mjs";
+import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -38,6 +38,14 @@ const outdir = arg("outdir", path.join(os.tmpdir(), "gp-pack-import"));
 if (!zipPath || !fs.existsSync(zipPath)) {
   console.error("Usage: import_pack.mjs --zip pack.zip [--force] [--outdir /tmp/...]");
   process.exit(1);
+}
+
+// S3-E tip1.1 — PROBE_CACHE strict (0|1); anything else → CONFIG_INVALID, exit 2.
+try {
+  probeCacheEnabled();
+} catch (err) {
+  console.error(`ERROR ${err.message}`);
+  process.exit(2);
 }
 
 const entries = unzipStore(fs.readFileSync(zipPath));

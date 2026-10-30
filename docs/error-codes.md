@@ -25,7 +25,7 @@ alphabetical within a group. A code can appear in more than one group (e.g. API 
 | `NOT_FOUND` | 404 | unknown asset id, unknown route, `/api/openapi.*` | Resource or route does not exist | Check the id / path; list with `GET /api/assets` |
 | `OPENAPI_PARSE` | 500 | `server/src/openapi.js` | `docs/openapi.yaml` failed to parse | Fix the YAML (the S3-C OpenAPI gate test shows the parse error) |
 | `PAYLOAD_TOO_LARGE` | 413 | body-parser error middleware | JSON body larger than the express limit | Send a smaller body; GLBs go on disk, not in JSON |
-| `RATE_LIMITED` | 429 | `server/src/security.js` `rateLimiter` (POST/PUT/PATCH/DELETE under `/api/`, per client IP) | Token bucket of `RATE_LIMIT_PER_MIN` (default 60) is empty; body `{retryAfterSec}` + `Retry-After` header (whole seconds ≥ 1). GET/HEAD/OPTIONS never throttled. Client = socket address; `X-Forwarded-For` only with `TRUST_PROXY=1`, so behind the Vite dev proxy every browser shares one 127.0.0.1 bucket (accepted) | Wait `retryAfterSec` (the UI shows a countdown); raise `RATE_LIMIT_PER_MIN` for bulk imports |
+| `RATE_LIMITED` | 429 | `server/src/security.js` `rateLimiter` (POST/PUT/PATCH/DELETE under `/api/`, per client IP) | Token bucket of `RATE_LIMIT_PER_MIN` (default 60) is empty; body `{retryAfterSec}` + `Retry-After` header (whole seconds ≥ 1). GET/HEAD/OPTIONS never throttled. Client = socket address; with `TRUST_PROXY=1` the right-most `X-Forwarded-For` entry (the one the proxy appended); path match is case-insensitive (`/API/` is limited too), so behind the Vite dev proxy every browser shares one 127.0.0.1 bucket (accepted) | Wait `retryAfterSec` (the UI shows a countdown); raise `RATE_LIMIT_PER_MIN` for bulk imports |
 | `VALIDATION` | 400 | POST/PATCH asset, list query (`stage`, `sort`, `limit` 1–100), schema issues without a specific code | Body or query failed validation; `{issues}` carries Zod issues | Fix the field named in `issues[].path` / `error` |
 
 ### 2. Scene / V-codes
@@ -73,6 +73,7 @@ Warn-only entries in `importMeta.warnings[]` (`{code, message?, detail?, clip?}`
 
 | code | HTTP / exit | where raised | meaning | fix hint |
 |---|---|---|---|---|
+| `CONFIG_INVALID` | exit 2 | `register_asset.mjs`, `import_pack.mjs` (before any probe) | `PROBE_CACHE` is not `0` or `1` (unset = on); one line `ERROR CONFIG_INVALID: PROBE_CACHE must be 0 or 1`, value never echoed | Set `PROBE_CACHE=0` (off) or `1` / unset (on) |
 | `E_BLENDER_BIN_MISSING` | exit 2 | `golden.mjs` via `npm run golden:refresh` | `BLENDER_BIN` points at a missing file | Fix the path (fail-closed, no PATH fallback) |
 | `E_BLENDER_BIN_UNSET` | exit 2 | `golden.mjs` via `npm run golden:refresh` | `BLENDER_BIN` not set | `BLENDER_BIN=/path/to/blender` |
 | `E_BLENDER_VERSION` | exit 1 | `golden.mjs` `blenderVersion` | Could not parse `blender --version` | Check the binary runs headless |

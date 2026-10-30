@@ -85,12 +85,16 @@ export function corsAllowlist(origins) {
   };
 }
 
-/** Client key: socket address; X-Forwarded-For only when TRUST_PROXY=1 (left-most entry). */
+/**
+ * Client key: socket address; with TRUST_PROXY=1 the RIGHT-most X-Forwarded-For entry (the one
+ * our single trusted proxy appended — same as Express `trust proxy 1`). Left-most entries are
+ * client-controlled and never used.
+ */
 export function clientKey(req, trustProxy) {
   if (trustProxy) {
     const xff = req.headers["x-forwarded-for"];
-    const first = xff ? String(xff).split(",")[0].trim() : "";
-    if (first) return first;
+    const parts = xff ? String(xff).split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (parts.length) return parts[parts.length - 1];
   }
   return req.socket?.remoteAddress || "unknown";
 }
@@ -104,7 +108,8 @@ export function rateLimiter({ perMin, trustProxy = false, now = () => Date.now()
   const ratePerMs = perMin / 60000;
   let sweepAt = now() + 60000;
   return (req, res, next) => {
-    if (!MUTATING_METHODS.has(req.method) || !req.path.startsWith("/api/")) return next();
+    // Express routing is case-insensitive (/API/assets reaches /api/assets) → compare lowercased.
+    if (!MUTATING_METHODS.has(req.method) || !String(req.path).toLowerCase().startsWith("/api/")) return next();
     const t = now();
     if (t >= sweepAt) {
       // drop full buckets so the map can't grow without bound
