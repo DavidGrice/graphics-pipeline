@@ -10,7 +10,7 @@
     "apps/world-builder/client"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build:schema": "npm run build -w @graphics-pipeline/asset-schema",
@@ -24,7 +24,10 @@
     "test:golden": "node --test tests/s3c-golden-seed.test.mjs",
     "golden:refresh": "node scripts/refresh-goldens.mjs",
     "pack:assets": "node apps/blender-pipeline/pack_assets.mjs",
-    "import:pack": "node apps/blender-pipeline/import_pack.mjs"
+    "import:pack": "node apps/blender-pipeline/import_pack.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "lint:ci": "node scripts/lint-ci.mjs",
+    "changelog": "node scripts/changelog.mjs"
   },
   "license": "MIT"
 }
