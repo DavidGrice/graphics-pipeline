@@ -18,7 +18,7 @@ Base `63dbf33` · pack `enhancement/s3d-growth-t4` · cut `/workspace/sprint3d-c
   2. **Scene / V-codes:** V1, V4/V4a, V5, V6b, V8, `SCENE_CAMERAS_MAX`, `SCENE_RESOLVE`
   3. **Asset:** `MULTI_ARMATURE`, `ASSET_IN_USE` (409 DELETE), `SLUG_CLASH` (409), `GLB_TOO_LARGE` (413), `PATH_OUTSIDE_INBOX` (400, covers every `DATA_ROOT` path), `ALT_TEXT_TOO_LONG` (400), `GLB_CORRUPT`, `FILE_MISSING` (404, repo-relative `rel` only), `PATCH_FORBIDDEN_FIELD` (400), `SCHEMA_VERSION_DECREMENT` (400), `MONGO_REQUIRED`
   4. **Import warnings (warn-only, `importMeta.warnings[]`):** `PNG_ALPHA_PREMULT_SUSPECT`, `IDLE_TPOSE_SUSPECT`
-  5. **CLI exits:** `E_GOLDEN_DRIFT` (1), `E_GOLDEN_BLENDER_VERSION` (2), `E_GOLDEN_UNSTABLE` (3), bad seed, bad slug or inbox escape in `run_mvp.sh` (2), `GLB_TOO_LARGE` in the CLI and `pipeline.sh` (4)
+  5. **CLI exits:** `E_GOLDEN_DRIFT` (1), `E_GOLDEN_BLENDER_VERSION` (2), `E_GOLDEN_UNSTABLE` (3), bad seed, bad slug or inbox escape in `run_mvp.sh` (2), `GLB_TOO_LARGE` in the CLI and `pipeline.sh` (4), `GLB_CORRUPT` in `register_asset.mjs` on a corrupt or truncated GLB (5, prints one clean `GLB_CORRUPT` line and no stack)
   6. **Test skips (#104):** `SKIP_NO_BLENDER`, `SKIP_NO_API`, `SKIP_NO_UI_URL`, `SKIP_NO_MONGO`, `SKIP_NO_KRITA`, `SKIP_PLATFORM`
 - The test is **both-directions fail**, per R1 §12. A code in source that's missing from the doc fails, and a code in the doc that's missing from source fails.
 
