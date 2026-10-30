@@ -7,6 +7,8 @@ import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/dr
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
+import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
+import { preflightGlb, probeDump, type PreflightResult } from "./s3dErrors";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -678,6 +680,11 @@ function normalizeSceneSnapshot(
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
+  // S3-D #89 — bump to re-mount the viewer boundary (Retry) after clearing the GLTF cache.
+  const [viewerRetry, setViewerRetry] = useState(0);
+  /** url → GLB preflight (missing/non-GLB never reaches useGLTF → no uncaught throw). */
+  const [preflight, setPreflight] = useState<Record<string, PreflightResult>>({});
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [clip, setClip] = useState("");
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
@@ -1175,6 +1182,33 @@ export function App() {
   const canPlay = clipsForUi.length > 0 && !isScene;
   const glbUrl =
     selected && !isScene ? `${API}/api/assets/${selected.id}/file` : null;
+  // S3-D #89 — preflight every GLB the viewer is about to load (single asset or scene children).
+  const viewerGlbUrls = useMemo(() => {
+    if (!selected) return [] as string[];
+    if (!isScene) return glbUrl ? [glbUrl] : [];
+    const out: string[] = [];
+    for (const n of sceneNodes) {
+      const c = resolveChild(n.assetId);
+      if (c?.formats?.glb) out.push(`${API}/api/assets/${c.id}/file`);
+    }
+    return [...new Set(out)];
+  }, [selected, isScene, glbUrl, sceneNodes, resolveChild]);
+  const viewerGlbKey = viewerGlbUrls.join("|");
+  useEffect(() => {
+    let alive = true;
+    for (const u of viewerGlbUrls) {
+      if (preflight[u]) continue;
+      preflightGlb(u).then((r) => {
+        if (alive) setPreflight((prev) => (prev[u] ? prev : { ...prev, [u]: r }));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerGlbKey, viewerRetry]);
+  const singlePreflight = glbUrl ? preflight[glbUrl] : undefined;
+
   const formatLabel = selected?.formats?.glb
     ? "glb"
     : selected?.formats?.obj
@@ -1311,6 +1345,7 @@ export function App() {
         <h1>Graphics World Builder</h1>
         <p className="muted">localhost · Sprint 3-C</p>
         <input
+          ref={searchInputRef}
           className="search"
           placeholder="Search…"
           value={search}
@@ -1459,6 +1494,64 @@ export function App() {
             </div>
           </div>
         )}
+        <ErrorBoundary
+          scope="viewer"
+          assetId={selected?.id ?? null}
+          url={glbUrl}
+          probe={probeDump(selected as Parameters<typeof probeDump>[0])}
+          resetKey={`${selected?.id ?? ""}:${viewerRetry}`}
+          onRetry={() => {
+            const urls = isScene
+              ? sceneNodes
+                  .map((n) => resolveChild(n.assetId))
+                  .filter((c): c is AssetMeta => Boolean(c))
+                  .map((c) => `${API}/api/assets/${c.id}/file`)
+              : glbUrl
+                ? [glbUrl]
+                : [];
+            for (const u of urls) useGLTF.clear(u);
+            setPreflight((prev) => {
+              const next = { ...prev };
+              for (const u of urls) delete next[u];
+              return next;
+            });
+            setLoadError(null);
+            setViewerRetry((n) => n + 1);
+          }}
+          onBack={() => {
+            setSelected(null);
+            setLoadError(null);
+            setGltfClips([]);
+            searchInputRef.current?.focus();
+          }}
+        >
+        {singlePreflight && !singlePreflight.ok ? (
+          <ErrorCard
+            scope="viewer"
+            info={singlePreflight.info}
+            assetId={selected?.id ?? null}
+            url={glbUrl}
+            probe={probeDump(selected as Parameters<typeof probeDump>[0])}
+            onRetry={() => {
+              if (glbUrl) {
+                useGLTF.clear(glbUrl);
+                setPreflight((prev) => {
+                  const next = { ...prev };
+                  delete next[glbUrl];
+                  return next;
+                });
+              }
+              setLoadError(null);
+              setViewerRetry((n) => n + 1);
+            }}
+            onBack={() => {
+              setSelected(null);
+              setLoadError(null);
+              setGltfClips([]);
+              searchInputRef.current?.focus();
+            }}
+          />
+        ) : (
         <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }} shadows={viewDraft.shadows}>
           <color attach="background" args={["#12151c"]} />
           <ambientLight intensity={0.65} />
@@ -1494,7 +1587,9 @@ export function App() {
                     child?.clipUx?.defaultClip ||
                     (child?.clips && child.clips[0]) ||
                     undefined;
-                  if (!child || !child.formats?.glb) {
+                  const childPf = childUrl ? preflight[childUrl] : undefined;
+                  if (childUrl && child?.formats?.glb && !childPf) return null; // preflight pending
+                  if (!child || !child.formats?.glb || (childPf && !childPf.ok)) {
                     return (
                       <SceneNodeMissing
                         key={n.id}
@@ -1537,7 +1632,7 @@ export function App() {
                     />
                   );
                 })
-              : glbUrl && !loadError ? (
+              : glbUrl && !loadError && singlePreflight?.ok ? (
                   <GltfPlayer
                     url={glbUrl}
                     clipName={clip}
@@ -1559,6 +1654,8 @@ export function App() {
                 ) : null}
           </Suspense>
         </Canvas>
+        )}
+        </ErrorBoundary>
         {selected && (
           <div className="import-meta-panel" aria-label="Import metadata">
             <div className="import-meta-title">
