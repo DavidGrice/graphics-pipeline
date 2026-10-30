@@ -17,7 +17,7 @@
     "dev:world": "npm run dev -w @graphics-pipeline/world-builder",
     "dev:client": "npm run dev -w @graphics-pipeline/world-builder-client",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test:s1": "node --test tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs tests/s3b-*.test.mjs tests/s3c-*.test.mjs tests/s3d-*.test.mjs",
+    "test:s1": "node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs tests/s3b-*.test.mjs tests/s3c-*.test.mjs tests/s3d-*.test.mjs",
     "smoke:live": "bash apps/blender-pipeline/smoke_live.sh",
     "test:s2a": "node --test tests/s2a-*.test.mjs",
     "test:s2b": "node --test tests/s2b-*.test.mjs",

@@ -88,6 +88,14 @@ export function makeRiggedGlb({ bones = 2, clips = { idle: 8, walk: 10, run: 10 
   };
   const times = pushFloats([0, 1], "SCALAR", 2, { min: [0], max: [1] });
   const pos = pushFloats([0, 0, 0, 1, 0, 0, 0, 1, 0], "VEC3", 3, { min: [0, 0, 0], max: [1, 1, 0] });
+  // renderable skin attributes (three.js SkinnedMesh): JOINTS_0 u16 VEC4 → bone 0, WEIGHTS_0 VEC4 = 1
+  const jointsBuf = Buffer.alloc(3 * 4 * 2);
+  bufferViews.push({ buffer: 0, byteOffset: byteLen, byteLength: jointsBuf.length });
+  bin.push(jointsBuf);
+  byteLen += jointsBuf.length;
+  accessors.push({ bufferView: bufferViews.length - 1, componentType: 5123, count: 3, type: "VEC4" });
+  const joints = accessors.length - 1;
+  const weights = pushFloats([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "VEC4", 3);
   const animations = Object.entries(clips).map(([name, deg]) => {
     const out = pushFloats([...quatY(0), ...quatY(deg)], "VEC4", 2);
     return {
@@ -104,7 +112,7 @@ export function makeRiggedGlb({ bones = 2, clips = { idle: 8, walk: 10, run: 10 
     scene: 0,
     scenes: [{ nodes: [0] }],
     nodes,
-    meshes: [{ primitives: [{ attributes: { POSITION: pos, JOINTS_0: pos, WEIGHTS_0: pos } }] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: pos, JOINTS_0: joints, WEIGHTS_0: weights } }] }],
     skins: [{ joints: Array.from({ length: bones }, (_, i) => i + 1) }],
     animations,
     accessors,
@@ -243,10 +251,10 @@ export function browserEnv() {
   try {
     ({ chromium } = createRequire(path.join(process.env.PLAYWRIGHT_CORE_DIR || ROOT, "/"))("playwright-core"));
   } catch {
-    return { skip: "SKIP_ENV_PLAYWRIGHT: playwright-core not resolvable (set PLAYWRIGHT_CORE_DIR)" };
+    return { skip: "SKIP_PLATFORM: playwright-core not resolvable (set PLAYWRIGHT_CORE_DIR)" };
   }
   const exe = process.env.CHROME_BIN || "/usr/bin/google-chrome";
-  if (!fs.existsSync(exe)) return { skip: `SKIP_ENV_CHROME: Chrome not found at ${exe}` };
+  if (!fs.existsSync(exe)) return { skip: `SKIP_PLATFORM: Chrome not found at ${exe}` };
   return { chromium, exe, UI, API: process.env.WORLD_API || "http://127.0.0.1:8787" };
 }
 
