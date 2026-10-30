@@ -8,7 +8,7 @@
  */
 
 /** Codes a schema issue message may carry as a `CODE:` prefix. */
-const ISSUE_CODES = ["MULTI_ARMATURE", "SCENE_CAMERAS_MAX", "HUMANOID_BONE_COUNT", "ARMATURE_COUNT"];
+const ISSUE_CODES = ["MULTI_ARMATURE", "SCENE_CAMERAS_MAX", "HUMANOID_BONE_COUNT", "ARMATURE_COUNT", "ALT_TEXT_TOO_LONG"];
 
 /**
  * @param {import('express').Response} res

@@ -334,7 +334,20 @@ const res = await fetch(`${api}/api/assets`, {
 });
 const text = await res.text();
 if (!res.ok) {
-  console.error("POST failed", res.status, text);
+  // nothing was registered → do not leave the copied GLB/preview behind as an orphan
+  fs.rmSync(assetDir, { recursive: true, force: true });
+  let j = null;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    /* non-JSON */
+  }
+  if (res.status === 409 && j?.code === "SLUG_CLASH") {
+    // S3-D #127 — clean one-liner with the server's suggestion
+    console.error(`ERROR SLUG_CLASH: slug "${j.slug}" is already used by ${j.existingId}; retry with --slug ${j.suggestedSlug}`);
+  } else {
+    console.error("POST failed", res.status, text);
+  }
   process.exit(1);
 }
 console.log(text);

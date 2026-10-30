@@ -13,7 +13,25 @@ import {
   ClipUxSchema,
   parseMaxGlbMb,
   maxGlbBytes,
+  ALT_TEXT_MAX,
+  suggestSlug,
 } from "@graphics-pipeline/asset-schema";
+
+/**
+ * S3-D #88 — normalise altText. Returns { value } (undefined = clear) or { error } envelope args.
+ * Trimmed; "" clears; > ALT_TEXT_MAX → ALT_TEXT_TOO_LONG; non-string → VALIDATION.
+ */
+function normaliseAltText(raw) {
+  if (raw === null) return { value: undefined };
+  if (typeof raw !== "string") return { error: ["VALIDATION", "altText must be a string"] };
+  const t = raw.trim();
+  if (t.length > ALT_TEXT_MAX) {
+    return {
+      error: ["ALT_TEXT_TOO_LONG", `altText is ${t.length} characters; max ${ALT_TEXT_MAX}`, { length: t.length, max: ALT_TEXT_MAX }],
+    };
+  }
+  return { value: t.length ? t : undefined };
+}
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
 import { sendError, sendInternal, sendValidation } from "./errors.js";
@@ -272,6 +290,20 @@ app.get("/api/assets", async (req, res) => {
     const characterTypeList = queryStringList(req.query.characterType);
     const clipList = queryStringList(req.query.clip);
     const tagList = queryStringList(req.query.tag);
+    // S3-D #94 — optional ?sort=-createdAt|createdAt and ?limit=1..100
+    const sortList = queryStringList(req.query.sort);
+    const limitList = queryStringList(req.query.limit);
+    if (sortList.length > 1 || (sortList.length && !["-createdAt", "createdAt"].includes(sortList[0]))) {
+      return sendError(res, 400, "VALIDATION", 'sort must be "-createdAt" or "createdAt"');
+    }
+    let limit = null;
+    if (limitList.length) {
+      const l = limitList[0];
+      if (limitList.length > 1 || !/^[0-9]+$/.test(l) || Number(l) < 1 || Number(l) > 100) {
+        return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100");
+      }
+      limit = Number(l);
+    }
 
     for (const stage of stageList) {
       if (!VALID_STAGES.has(stage)) {
@@ -318,7 +350,24 @@ app.get("/api/assets", async (req, res) => {
       return true;
     });
 
-    return res.json(filtered);
+    let out = filtered;
+    if (sortList.length) {
+      const dir = sortList[0].startsWith("-") ? -1 : 1;
+      const ts = (d) => {
+        const t = Date.parse(d?.createdAt ?? "");
+        return Number.isFinite(t) ? t : null;
+      };
+      // stable; legacy assets without a parseable createdAt always sort last
+      out = filtered
+        .map((d, i) => ({ d, i, t: ts(d) }))
+        .sort((a, b) => {
+          if (a.t == null || b.t == null) return (a.t == null) - (b.t == null) || a.i - b.i;
+          return (a.t - b.t) * dir || a.i - b.i;
+        })
+        .map((x) => x.d);
+    }
+    if (limit != null) out = out.slice(0, limit);
+    return res.json(out);
   } catch (err) {
     sendInternal(req, res, err);
   }
@@ -343,6 +392,16 @@ app.post("/api/assets", async (req, res) => {
     if (!body?.id || !body?.slug) {
       return sendError(res, 400, "VALIDATION", "id and slug required");
     }
+    // S3-D #88 — altText normalised before schema (ALT_TEXT_TOO_LONG beats generic VALIDATION)
+    if (Object.prototype.hasOwnProperty.call(body, "altText")) {
+      const a = normaliseAltText(body.altText);
+      if (a.error) return sendError(res, 400, ...a.error);
+      if (a.value === undefined) delete body.altText;
+      else body.altText = a.value;
+    }
+    // S3-D #94 — history needs createdAt; stamp it when the client omitted it
+    if (body.createdAt == null) body.createdAt = new Date().toISOString();
+    if (body.updatedAt == null) body.updatedAt = body.createdAt;
     // Soft invariant: clips ⇒ glb or fbx, never obj for anim
     if (Array.isArray(body.clips) && body.clips.length > 0) {
       if (!body.formats?.glb && !body.formats?.fbx) {
@@ -379,6 +438,25 @@ app.post("/api/assets", async (req, res) => {
     if (!parsed.success) return sendValidation(res, parsed);
 
     const col = collection();
+    // S3-D #127 — a slug owned by a different id → 409 SLUG_CLASH (same id re-register is idempotent)
+    {
+      const owners = col
+        ? await col.find({ slug: body.slug }).toArray()
+        : [...memoryAssets.values()].filter((d) => d.slug === body.slug);
+      const other = owners.find((d) => d.id !== body.id);
+      if (other) {
+        const taken = new Set(
+          col
+            ? (await col.find({}, { projection: { slug: 1 } }).toArray()).map((d) => d.slug)
+            : [...memoryAssets.values()].map((d) => d.slug),
+        );
+        return sendError(res, 409, "SLUG_CLASH", `slug "${body.slug}" is already used by ${other.id}`, {
+          slug: body.slug,
+          existingId: other.id,
+          suggestedSlug: suggestSlug(body.slug, (s) => taken.has(s)),
+        });
+      }
+    }
     const resolveDoc = async (idOrSlug) => {
       if (col) {
         return (
@@ -478,6 +556,14 @@ app.patch("/api/assets/:id", async (req, res) => {
     if (body.license !== undefined) {
       patch.license = body.license;
     }
+    // S3-D #88 — altText: trimmed 1–280, "" or null clears, > 280 → ALT_TEXT_TOO_LONG
+    let clearAltText = false;
+    if (Object.prototype.hasOwnProperty.call(body, "altText")) {
+      const a = normaliseAltText(body.altText);
+      if (a.error) return sendError(res, 400, ...a.error);
+      if (a.value === undefined) clearAltText = true;
+      else patch.altText = a.value;
+    }
     // S3-B #91 — merge importMeta (do not wipe unrelated fields)
     if (body.importMeta !== undefined) {
       if (body.importMeta === null || typeof body.importMeta !== "object") {
@@ -517,6 +603,7 @@ app.patch("/api/assets/:id", async (req, res) => {
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (clearAltText) delete next.altText;
 
     const parsed = safeParseAsset(next);
     if (!parsed.success) return sendValidation(res, parsed);
@@ -556,7 +643,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     }
 
     if (col) {
-      await col.updateOne({ id }, { $set: next });
+      await col.updateOne({ id }, clearAltText ? { $set: next, $unset: { altText: "" } } : { $set: next });
     } else {
       memoryAssets.set(id, next);
     }

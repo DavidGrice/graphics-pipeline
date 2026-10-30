@@ -168,6 +168,18 @@ export const ImportWarningSchema = z.object({
 });
 export type ImportWarning = z.infer<typeof ImportWarningSchema>;
 
+/** S3-D #88 — alt text cap (chars). */
+export const ALT_TEXT_MAX = 280;
+
+/** S3-D #127 — first free `<slug>-2`, `-3`, … (kebab-valid; trailing -N of the input is kept). */
+export function suggestSlug(slug: string, isTaken: (s: string) => boolean): string {
+  for (let n = 2; n < 10000; n++) {
+    const cand = `${slug}-${n}`;
+    if (!isTaken(cand)) return cand;
+  }
+  return `${slug}-${Date.now()}`;
+}
+
 /** S3-D #76 — GLB size cap (MB). Default 100; integer ≥ 1; invalid → throw (fail-closed). */
 export const MAX_GLB_MB_DEFAULT = 100;
 export function parseMaxGlbMb(raw: string | undefined | null): number {
@@ -315,6 +327,8 @@ export const AssetSchema = z
     clipDurations: ClipDurationsSchema,
     /** S3-B #137 SPDX license. */
     license: LicenseSpdxSchema.optional(),
+    /** S3-D #88 — optional caption / alt text (trimmed, 1–280); additive, schema stays 3. */
+    altText: z.string().min(1).max(ALT_TEXT_MAX, `ALT_TEXT_TOO_LONG: altText must be at most ${ALT_TEXT_MAX} characters`).optional(),
     /** Schema document version; S3-A/B = 3. Missing on older assets → treat as 1|2 in readers. */
     assetSchemaVersion: z.number().int().positive().optional(),
     importMeta: ImportMetaSchema.optional(),
