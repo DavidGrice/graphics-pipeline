@@ -132,10 +132,10 @@ test("#89 browser: orphan GLB → card in viewer, sidebar usable, Retry/Copy/Bac
   try {
     ({ chromium } = createRequire(path.join(process.env.PLAYWRIGHT_CORE_DIR || ROOT, "/"))("playwright-core"));
   } catch {
-    return t.skip("SKIP_ENV_PLAYWRIGHT: playwright-core not resolvable (set PLAYWRIGHT_CORE_DIR)");
+    return t.skip("SKIP_PLATFORM: playwright-core not resolvable (set PLAYWRIGHT_CORE_DIR)");
   }
   const exe = process.env.CHROME_BIN || "/usr/bin/google-chrome";
-  if (!fs.existsSync(exe)) return t.skip(`SKIP_ENV_CHROME: Chrome not found at ${exe}`);
+  if (!fs.existsSync(exe)) return t.skip(`SKIP_PLATFORM: Chrome not found at ${exe}`);
   const API = process.env.WORLD_API || "http://127.0.0.1:8787";
   const id = `5d3d0002-0000-4000-8000-${String(process.pid).padStart(12, "0")}`;
   const slug = `s3d-orphan-${process.pid}`;
