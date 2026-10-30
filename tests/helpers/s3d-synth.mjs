@@ -3,12 +3,14 @@
  * private, hermetic world-builder API (tmp WB_DATA_ROOT, in-memory store, free port).
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -212,4 +214,47 @@ export function billboardBody(id, slug, formats = {}) {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Transpile a client TS module (no JSX) and import it. */
+export async function loadClientTs(rel) {
+  const ts = createRequire(import.meta.url)("typescript");
+  const out = ts.transpileModule(fs.readFileSync(path.join(ROOT, rel), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gp-s3d-ts-"));
+  const mod = path.join(dir, path.basename(rel).replace(/\.tsx?$/, ".mjs"));
+  fs.writeFileSync(mod, out);
+  try {
+    return await import(pathToFileURL(mod).href);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Browser gate shared by S3-D UI checks: returns { chromium, exe, UI, API } or a SKIP_* reason.
+ * Every skip reason starts with a SKIP_* code (#104).
+ */
+export function browserEnv() {
+  const UI = process.env.UI_URL;
+  if (!UI) return { skip: "SKIP_NO_UI_URL: set UI_URL (vite) + WORLD_API for the browser check" };
+  let chromium;
+  try {
+    ({ chromium } = createRequire(path.join(process.env.PLAYWRIGHT_CORE_DIR || ROOT, "/"))("playwright-core"));
+  } catch {
+    return { skip: "SKIP_ENV_PLAYWRIGHT: playwright-core not resolvable (set PLAYWRIGHT_CORE_DIR)" };
+  }
+  const exe = process.env.CHROME_BIN || "/usr/bin/google-chrome";
+  if (!fs.existsSync(exe)) return { skip: `SKIP_ENV_CHROME: Chrome not found at ${exe}` };
+  return { chromium, exe, UI, API: process.env.WORLD_API || "http://127.0.0.1:8787" };
+}
+
+export const CHROME_ARGS = ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"];
+
+/** Unique-per-run UUID derived from a tag (tests must never reuse a slug with a new id: #127). */
+const RUN_SALT = `${process.pid}-${Date.now()}`;
+export function runId(tag) {
+  const h = createHash("sha1").update(`${RUN_SALT}:${tag}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }

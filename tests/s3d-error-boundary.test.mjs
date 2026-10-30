@@ -152,7 +152,7 @@ test("#89 browser: orphan GLB → card in viewer, sidebar usable, Retry/Copy/Bac
       const errs = [];
       p.on("pageerror", (e) => errs.push(String(e)));
       await p.goto(UI, { waitUntil: "networkidle" });
-      await p.getByRole("button", { name: new RegExp(slug) }).click();
+      await p.locator("ul.asset-list").getByRole("button", { name: new RegExp(slug) }).click();
       const card = p.locator(".viewer [data-testid=error-card]");
       await card.waitFor({ timeout: 10000 });
       const line = await p.getByTestId("error-card-status").textContent();
@@ -166,7 +166,7 @@ test("#89 browser: orphan GLB → card in viewer, sidebar usable, Retry/Copy/Bac
       await p.getByTestId("error-card-back").click();
       assert.equal(await card.count(), 0);
       await p.getByLabel("Search assets").fill(slug);
-      assert.ok(await p.getByRole("button", { name: new RegExp(slug) }).isVisible(), "search still works");
+      assert.ok(await p.locator("ul.asset-list").getByRole("button", { name: new RegExp(slug) }).isVisible(), "search still works");
       assert.deepEqual(errs, [], `${w}x${h} pageerror`);
       await p.close();
     }
