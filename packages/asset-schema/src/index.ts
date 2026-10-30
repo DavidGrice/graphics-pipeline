@@ -155,8 +155,36 @@ export function isContractClipName(name: string): boolean {
  * Mixamo/FBX/PNG import provenance (S2-D-E2/E3).
  * Probe still wins for clips/rig/stage; this only records source honesty.
  */
+/**
+ * S3-D #49/#97 — warn-only import findings (never block register).
+ * Additive + optional: assetSchemaVersion stays 3.
+ */
+export const IMPORT_WARNING_CODES = ["PNG_ALPHA_PREMULT_SUSPECT", "IDLE_TPOSE_SUSPECT"] as const;
+export const ImportWarningSchema = z.object({
+  code: z.string().regex(/^[A-Z][A-Z0-9_]+$/, "warning code must be UPPER_SNAKE"),
+  message: z.string().max(500).optional(),
+  detail: z.record(z.string(), z.unknown()).optional(),
+  clip: z.string().optional(),
+});
+export type ImportWarning = z.infer<typeof ImportWarningSchema>;
+
+/** S3-D #76 — GLB size cap (MB). Default 100; integer ≥ 1; invalid → throw (fail-closed). */
+export const MAX_GLB_MB_DEFAULT = 100;
+export function parseMaxGlbMb(raw: string | undefined | null): number {
+  if (raw == null || String(raw).trim() === "") return MAX_GLB_MB_DEFAULT;
+  const t = String(raw).trim();
+  if (!/^[0-9]+$/.test(t) || Number(t) < 1 || !Number.isSafeInteger(Number(t) * 1024 * 1024)) {
+    throw new Error(`MAX_GLB_MB must be an integer >= 1 (got: ${JSON.stringify(raw)})`);
+  }
+  return Number(t);
+}
+export function maxGlbBytes(mb: number): number {
+  return mb * 1024 * 1024;
+}
+
 export const ImportMetaSchema = z.object({
   source: z.enum(["mixamo", "fbx", "png_pipeline", "unknown"]),
+  warnings: z.array(ImportWarningSchema).max(50).optional(),
   originalFilename: z.string().optional(),
   actionMap: z.record(z.string(), z.string()).optional(),
   boneMapStub: z.string().optional(),
@@ -437,8 +465,14 @@ export const AssetSchema = z
             'characterType "humanoid" requires hasArmature and hasWeights true',
         });
       }
+      // S3-D #97 (R1 §5): a clip flagged IDLE_TPOSE_SUSPECT does not fill the idle slot,
+      // so a humanoid whose only idle is a T-pose fails this existing gate.
+      const tposeIdle = (asset.importMeta?.warnings ?? []).some(
+        (w) => w.code === "IDLE_TPOSE_SUSPECT" && (w.clip ?? "idle") === "idle",
+      );
       if (
         !asset.clips.includes("idle") ||
+        tposeIdle ||
         !asset.clips.includes("walk")
       ) {
         ctx.addIssue({
