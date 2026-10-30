@@ -16,8 +16,14 @@ import { resolveUnder } from "../world-builder/server/src/pathGuard.js";
 /** Bump whenever probeGlb()'s output shape or semantics change. */
 export const PROBE_VERSION = 1;
 
+/** PROBE_CACHE: unset/""/1 → on, 0 → off, anything else → CONFIG_INVALID (fail-closed). */
 export function probeCacheEnabled(env = process.env) {
-  return String(env.PROBE_CACHE ?? "").trim() !== "0";
+  const v = String(env.PROBE_CACHE ?? "").trim();
+  if (v === "" || v === "1") return true;
+  if (v === "0") return false;
+  const err = new Error("CONFIG_INVALID: PROBE_CACHE must be 0 or 1");
+  err.code = "CONFIG_INVALID";
+  throw err;
 }
 
 export function sha256File(abs) {

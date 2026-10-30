@@ -75,9 +75,21 @@ if [[ -f "${OUT_GLB}" ]]; then
     echo "ERROR GLB_TOO_LARGE: ${GLB_BYTES} bytes > ${MAX_BYTES} (MAX_GLB_MB=${MAX_GLB_MB})" >&2
     exit 4
   fi
-  # S3-E #66 — timings.json beside the exported GLB (fixed key set; register_asset.mjs fills
-  # probe/copy/register when it registers this GLB). Never part of goldens (hashes are GLB-only).
+  # S3-E #66 (tip1.1 NIT-E1-1) — per-GLB sidecar <name>.timings.json = {glb, sha256, stages:{export}}.
+  # register_asset.mjs uses the export ms only when BOTH the GLB name and sha256 match, so two
+  # GLBs in one folder never share an export time. Never part of goldens (GLB-only hashes).
   EXPORT_MS=$(( $(now_ms) - EXPORT_T0 ))
-  printf '{"stages":{"export":%d,"probe":null,"copy":null,"register":null},"totalMs":%d,"probeCache":null}\n' \
-    "${EXPORT_MS}" "${EXPORT_MS}" > "$(dirname "${OUT_GLB}")/timings.json"
+  GLB_NAME="$(basename "${OUT_GLB}")"
+  GLB_SHA=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    GLB_SHA="$(sha256sum "${OUT_GLB}" | cut -d' ' -f1)"
+  elif command -v shasum >/dev/null 2>&1; then
+    GLB_SHA="$(shasum -a 256 "${OUT_GLB}" | cut -d' ' -f1)"
+  fi
+  # GLB name is written via %s after a JSON-safety check (no quotes / backslashes / controls).
+  NAME_RE='^[^"\\[:cntrl:]]+$'
+  if [[ "${GLB_NAME}" =~ ${NAME_RE} ]]; then
+    printf '{"glb":"%s","sha256":"%s","stages":{"export":%d}}\n' \
+      "${GLB_NAME}" "${GLB_SHA}" "${EXPORT_MS}" > "$(dirname "${OUT_GLB}")/${GLB_NAME%.glb}.timings.json"
+  fi
 fi

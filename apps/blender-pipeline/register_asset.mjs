@@ -5,7 +5,7 @@
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
  *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
- * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
+ * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB or PROBE_CACHE (CONFIG_INVALID) · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
-import { cachedProbe } from "./probe_cache.mjs";
+import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
 import { buildTimings, readExportMs, writeTimings } from "./timings.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
 import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
@@ -127,6 +127,13 @@ if (importMetaPath) {
 }
 
 // S3-D #76 — size cap BEFORE probe (probe reads the whole file). Exit 4 = GLB_TOO_LARGE.
+// S3-E tip1.1 — PROBE_CACHE is strict (0|1, unset = 1); anything else → CONFIG_INVALID, exit 2.
+try {
+  probeCacheEnabled();
+} catch (err) {
+  console.error(`ERROR ${err.message}`);
+  process.exit(2);
+}
 {
   let mb;
   try {
@@ -147,9 +154,10 @@ if (importMetaPath) {
 // S3-E #134 — content-addressed probe cache (PROBE_CACHE=0 → off); failures are never cached.
 let probed;
 let probeCache;
+let glbSha;
 const tProbe0 = performance.now();
 try {
-  ({ probed, probeCache } = cachedProbe(glbAbs, { dataRoot: DATA_DIR }));
+  ({ probed, probeCache, sha256: glbSha } = cachedProbe(glbAbs, { dataRoot: DATA_DIR }));
 } catch (err) {
   const reason = err?.code === GLB_CORRUPT ? err.reason : "unreadable GLB";
   console.error(`ERROR ${GLB_CORRUPT}: ${path.basename(glbAbs)}: ${reason} — not registered`);
@@ -335,7 +343,7 @@ if (idleExcluded) {
 }
 if (importMeta) {
   // S3-E #66 — additive mirror only when importMeta already exists (never creates importMeta).
-  const exportMs = readExportMs(glbAbs);
+  const exportMs = readExportMs(glbAbs, glbSha);
   const pre = buildTimings({ export: exportMs, probe: probeMs, copy: copyMs, register: 0 }, probeCache);
   importMeta.timingsMs = {
     ...(exportMs != null ? { export: pre.stages.export } : {}),
@@ -377,7 +385,7 @@ if (!res.ok) {
 }
 // S3-E #66 — timings.json beside the registered asset (gitignored data/; never in goldens).
 const timings = buildTimings(
-  { export: readExportMs(glbAbs), probe: probeMs, copy: copyMs, register: registerMs },
+  { export: readExportMs(glbAbs, glbSha), probe: probeMs, copy: copyMs, register: registerMs },
   probeCache,
 );
 try {
