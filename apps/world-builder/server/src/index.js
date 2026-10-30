@@ -16,7 +16,7 @@ import {
 } from "@graphics-pipeline/asset-schema";
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
-import { sendError, sendValidation } from "./errors.js";
+import { sendError, sendInternal, sendValidation } from "./errors.js";
 import {
   resolveUnder,
   PathGuardError,
@@ -240,13 +240,20 @@ app.get("/api/health", async (_req, res) => {
 
   const ok = strict ? krita.ok : true;
   const status = ok ? 200 : 503;
+  // R1 nit: a 5xx body never carries absolute paths — strip tool paths/dataRoot on 503.
+  const safeTools = ok
+    ? tools
+    : Object.fromEntries(
+        Object.entries(tools).map(([k, v]) => [k, v ? { version: v.version } : null]),
+      );
   res.status(status).json({
+    ...(ok ? {} : { code: "KRITA_DOWN", error: "strict Krita health check failed" }),
     ok,
     mongo: Boolean(db),
     krita,
-    tools,
+    tools: safeTools,
     blender: tools.blender?.version ?? null,
-    dataRoot: DATA_ROOT,
+    ...(ok ? { dataRoot: DATA_ROOT } : {}),
     strictKrita: strict,
     ...(bridgeMode === "mock" ? { bridge: "mock" } : {}),
   });
@@ -313,7 +320,7 @@ app.get("/api/assets", async (req, res) => {
 
     return res.json(filtered);
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -326,7 +333,7 @@ app.get("/api/assets/:id", async (req, res) => {
     if (!doc) return sendError(res, 404, "NOT_FOUND", "not found");
     res.json(doc);
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -420,7 +427,7 @@ app.post("/api/assets", async (req, res) => {
     }
     res.status(201).json(body);
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -555,7 +562,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     }
     res.json(next);
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -601,7 +608,7 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
     }
     res.json(next);
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -636,7 +643,7 @@ app.delete("/api/assets/:id", async (req, res) => {
     else memoryAssets.delete(id);
     res.status(204).end();
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -673,9 +680,12 @@ app.get("/api/assets/:id/file", async (req, res) => {
     if (!fs.existsSync(abs)) {
       return sendError(res, 404, "FILE_MISSING", `file missing: ${rel}`, { rel, assetId: req.params.id });
     }
-    res.sendFile(abs);
+    // fs errors (EACCES/EISDIR/…) surface here, not in the catch — keep them out of the body
+    res.sendFile(abs, (err) => {
+      if (err) sendInternal(req, res, err);
+    });
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
@@ -698,15 +708,23 @@ app.get("/api/assets/:id/preview", async (req, res) => {
     if (!fs.existsSync(abs)) {
       return sendError(res, 404, "FILE_MISSING", `preview missing: ${rel}`, { rel, assetId: req.params.id });
     }
-    res.sendFile(abs);
+    // fs errors (EACCES/EISDIR/…) surface here, not in the catch — keep them out of the body
+    res.sendFile(abs, (err) => {
+      if (err) sendInternal(req, res, err);
+    });
   } catch (err) {
-    sendError(res, 500, "INTERNAL", String(err.message || err));
+    sendInternal(req, res, err);
   }
 });
 
 
 // S3-C openapi fix: JSON at .json (application/json), YAML at .yaml (application/yaml)
 registerOpenApiRoutes(app, REPO_ROOT);
+
+// R1 nit (tip1): JSON 404 for unknown routes (Express' HTML default echoes the URL path) and a
+// terminal error handler — no stack/err.message/absolute path ever reaches a response body.
+app.use((_req, res) => sendError(res, 404, "NOT_FOUND", "no such route"));
+app.use((err, req, res, _next) => sendInternal(req, res, err));
 
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 

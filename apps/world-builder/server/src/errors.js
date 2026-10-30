@@ -21,6 +21,23 @@ export function sendError(res, status, code, message, extra) {
   return res.status(status).json({ ...(extra || {}), code, error: message });
 }
 
+/** Fixed 500 text — details (fs errors carry absolute paths) go to the server log only. */
+export const INTERNAL_MESSAGE = "internal error";
+
+/**
+ * 500 INTERNAL with a fixed body; logs code + route + the real error server-side.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @param {unknown} err
+ */
+export function sendInternal(req, res, err) {
+  const route = `${req.method} ${req.route?.path ?? req.path}`;
+  const e = /** @type {{ code?: unknown, stack?: unknown, message?: unknown }} */ (err ?? {});
+  console.error(`[world-builder] INTERNAL ${route} code=${e.code ?? "-"}`, e.stack || e.message || err);
+  if (res.headersSent) return;
+  return sendError(res, 500, "INTERNAL", INTERNAL_MESSAGE);
+}
+
 /** Pick the most specific code from zod issues (named refinement codes win). */
 export function codeFromIssues(issues) {
   for (const i of issues || []) {

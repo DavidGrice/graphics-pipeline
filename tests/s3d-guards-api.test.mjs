@@ -251,3 +251,66 @@ test("#141 run_mvp.sh: slug '../a' / non-kebab → exit 2; symlinked inbox slug 
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test("R1 nit: fs error on file/preview routes → 500 {code:INTERNAL, error:'internal error'}; no 4xx/5xx body leaks a path", async () => {
+  const ABS = /(^|[\s'"])\/(home|workspace|tmp|etc|usr|var)\//;
+  const bodies = [];
+  const grab = async (label, url, init) => {
+    const r = await fetch(url, init);
+    const text = await r.text();
+    if (r.status >= 400) bodies.push({ label, status: r.status, text });
+    return { status: r.status, text };
+  };
+
+  // EACCES: GLB exists but is unreadable (sendFile stream error → callback). Root ignores 0o000.
+  const id = uid(300);
+  const glb = sparse(`assets/${id}/model.glb`, 64);
+  // EISDIR: preview path is a directory
+  fs.mkdirSync(path.join(api.dataRoot, "assets", id, "preview.png"), { recursive: true });
+  assert.equal((await post(billboardBody(id, "s3d-fs-error", { preview: `assets/${id}/preview.png` }))).status, 201);
+  fs.chmodSync(glb, 0o000);
+  try {
+    const canEacces = typeof process.getuid !== "function" || process.getuid() !== 0;
+    if (canEacces) {
+      const f = await grab("file EACCES", `${api.url}/api/assets/${id}/file`);
+      assert.equal(f.status, 500, f.text);
+      assert.deepEqual(JSON.parse(f.text), { code: "INTERNAL", error: "internal error" });
+    }
+    const p = await grab("preview EISDIR", `${api.url}/api/assets/${id}/preview`);
+    assert.ok(p.status >= 400, `directory preview must fail (${p.status})`);
+    if (p.status === 500) assert.deepEqual(JSON.parse(p.text), { code: "INTERNAL", error: "internal error" });
+    assert.match(api.log(), /INTERNAL GET \/api\/assets\/:id\/(file|preview)/, "details are logged server-side");
+  } finally {
+    fs.chmodSync(glb, 0o644);
+  }
+
+  // sweep of the other error paths
+  await grab("unknown route", `${api.url}/home/box/secret`);
+  await grab("unknown api route", `${api.url}/api/tmp/x`);
+  await grab("not found", `${api.url}/api/assets/nope`);
+  await grab("file missing", `${api.url}/api/assets/${uid(2)}/file`);
+  await grab("bad json", `${api.url}/api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{" });
+  await grab("traversal", `${api.url}/api/assets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(billboardBody(uid(301), "s3d-trav-sweep", { glb: "/etc/passwd" })),
+  });
+  const strict = await startApi({ HEALTH_STRICT_KRITA: "1", KRITA_HEALTH_MODE: "", KRITA_MCP_PORT: "1" });
+  try {
+    const h = await fetch(`${strict.url}/api/health`);
+    const ht = await h.text();
+    assert.equal(h.status, 503, ht);
+    bodies.push({ label: "health 503", status: 503, text: ht, root: strict.dataRoot });
+  } finally {
+    await strict.stop();
+  }
+
+  assert.ok(bodies.length >= 8, `swept ${bodies.length} error bodies`);
+  for (const b of bodies) {
+    assert.doesNotMatch(b.text, ABS, `${b.label} (${b.status}) leaked an absolute path: ${b.text}`);
+    for (const leak of [api.dataRoot, ROOT, b.root].filter(Boolean)) {
+      assert.ok(!b.text.includes(leak), `${b.label} leaked ${leak}`);
+    }
+    assert.match(b.text, /"code":"[A-Z][A-Z0-9_]+"/, `${b.label} is not a {code,error} JSON body: ${b.text}`);
+  }
+});

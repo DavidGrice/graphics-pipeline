@@ -31,9 +31,10 @@ export function registerOpenApiRoutes(app, repoRoot) {
     try {
       doc = loadOpenApi(repoRoot);
     } catch (err) {
-      return res.status(500).json({ error: `OPENAPI_PARSE: ${err.message || err}` });
+      console.error(`[world-builder] OPENAPI_PARSE GET ${_req.path}`, err);
+      return res.status(500).json({ code: "OPENAPI_PARSE", error: "docs/openapi.yaml failed to parse" });
     }
-    if (!doc) return res.status(404).json({ error: "docs/openapi.yaml missing" });
+    if (!doc) return res.status(404).json({ code: "NOT_FOUND", error: "docs/openapi.yaml missing" });
     if (format === "json") {
       return res.type("application/json").send(JSON.stringify(doc.json, null, 2));
     }
