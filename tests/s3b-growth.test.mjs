@@ -136,7 +136,7 @@ test("T1.4 golden hashes file tracked; mismatch fails; soft-env skip without Ble
     assert.match(golden[key]?.sha256 ?? "", /^[0-9a-f]{64}$/, `${key} must be real sha256`);
   }
   if (!process.env.BLENDER_BIN) {
-    t.skip("BLENDER_BIN unset — golden smoke soft-env skip (not a green lie)");
+    t.skip("SKIP_NO_BLENDER: BLENDER_BIN unset — golden smoke soft-env skip (not a green lie)");
     return;
   }
   assert.ok(fs.existsSync(process.env.BLENDER_BIN), "BLENDER_BIN set but missing (fail-closed)");
