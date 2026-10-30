@@ -1309,7 +1309,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 3-B</p>
+        <p className="muted">localhost · Sprint 3-C</p>
         <input
           className="search"
           placeholder="Search…"
@@ -1431,6 +1431,7 @@ export function App() {
             )}
           </div>
         </div>
+        <div className="viewer-stage">
         {statsOpen && (
           <div className="stats-panel" aria-label="Viewer stats">
             <div className="import-meta-title">Stats</div>
@@ -1558,240 +1559,6 @@ export function App() {
                 ) : null}
           </Suspense>
         </Canvas>
-        <div className="clip-bar">
-          <div className="clip-list" role="listbox" aria-label="Clips">
-            {canPlay ? (
-              clipsForUi.map((c, i) => (
-                <button
-                  key={c}
-                  type="button"
-                  role="option"
-                  aria-selected={clip === c}
-                  className={clip === c ? "clip active" : "clip"}
-                  onClick={() => selectClip(c)}
-                  title={
-                    (clipUx.defaultClip === c ? "Default clip" : "Click to play") +
-                    (hotkeyLabel(i) ? ` · hotkey ${hotkeyLabel(i)}` : "")
-                  }
-                >
-                  {hotkeyLabel(i) ? (
-                    <span className="hotkey" data-testid="clip-hotkey">
-                      {hotkeyLabel(i)}
-                    </span>
-                  ) : null}
-                  {c}
-                  {clipUx.defaultClip === c ? " ★" : ""}
-                </button>
-              ))
-            ) : (
-              <span className="muted empty-clips">
-                No clips on this asset — static empty-state (no demo fallback).
-                {(clipUx.disabled?.length ?? 0) > 0
-                  ? " Re-enable a clip in Author."
-                  : ""}
-              </span>
-            )}
-          </div>
-          <label className="loop-toggle">
-            <input
-              type="checkbox"
-              checked={loop}
-              disabled={!canPlay}
-              onChange={(e) => setLoop(e.target.checked)}
-            />
-            ⟲ loop
-          </label>
-          <label className="clip-select">
-            Clip:{" "}
-            <select
-              value={clip}
-              disabled={!canPlay}
-              onChange={(e) => {
-                setClip(e.target.value);
-                setPlaying(true);
-                setScrub(0);
-              }}
-            >
-              {canPlay ? (
-                clipsForUi.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))
-              ) : (
-                <option value="">(none — static)</option>
-              )}
-            </select>
-          </label>
-          <button
-            type="button"
-            disabled={!canPlay}
-            onClick={() => setPlaying((p) => !p)}
-            title={canPlay ? "Play / pause" : "No clips — Play disabled"}
-          >
-            {playing && canPlay ? "Pause" : "▶ Play"}
-          </button>
-          <label className="scrub">
-            Timeline
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.001}
-              value={scrub}
-              disabled={!canPlay || duration <= 0}
-              aria-label="Scrub active clip 0–1"
-              onMouseDown={() => setScrubbing(true)}
-              onTouchStart={() => setScrubbing(true)}
-              onMouseUp={() => setScrubbing(false)}
-              onTouchEnd={() => setScrubbing(false)}
-              onChange={(e) => {
-                setScrub(Number(e.target.value));
-                setScrubbing(true);
-              }}
-            />
-            <span className="muted">
-              {duration > 0 ? `${(scrub * duration).toFixed(2)}s` : "—"}
-            </span>
-          </label>
-          <span className="meta">Format: {formatLabel}</span>
-        </div>
-        <div className="clip-bar clip-bar-s3c" aria-label="Playback + overlay">
-          <label
-            className="blend"
-            title={
-              blendControlEnabled(clipsForUi)
-                ? "Crossfade between clips (0 = hard cut)"
-                : "Blend needs ≥ 2 clips"
-            }
-          >
-            Blend
-            <input
-              type="number"
-              min={0}
-              max={BLEND_MS_MAX}
-              step={50}
-              value={blendMs}
-              disabled={!canPlay || !blendControlEnabled(clipsForUi)}
-              aria-label="Clip blend ms (0–1000)"
-              onChange={(e) => setPlaybackPref({ blendMs: clampBlendMs(e.target.value) })}
-            />
-            ms
-          </label>
-          <label className="speed" title="Playback speed; clipDurations stay raw">
-            Speed
-            <input
-              type="range"
-              min={TIMESCALE_MIN}
-              max={TIMESCALE_MAX}
-              step={TIMESCALE_STEP}
-              value={timeScale}
-              disabled={!canPlay}
-              aria-label="Clip timescale 0.5–2.0"
-              onChange={(e) => setPlaybackPref({ timeScale: clampTimeScale(e.target.value) })}
-            />
-            <span className="muted">{timeScale.toFixed(1)}×</span>
-            <button
-              type="button"
-              className="tiny"
-              disabled={!canPlay || timeScale === TIMESCALE_DEFAULT}
-              onClick={() => setPlaybackPref({ timeScale: TIMESCALE_DEFAULT })}
-            >
-              Reset
-            </button>
-          </label>
-          {canPlay && clip && selected?.clipDurations?.[clip] !== undefined ? (
-            <span className="muted" title="Effective length = raw clipDurations / speed">
-              effective {effectiveDurationMs(selected.clipDurations[clip], timeScale)} ms
-            </span>
-          ) : null}
-          <span className="muted" title="Keys 1–9 select the n-th clip (ignored while typing)">
-            Keys 1–9 = clips
-          </span>
-          <label className="overlay-toggle">
-            <input
-              type="checkbox"
-              checked={wireframe}
-              onChange={(e) => setWireframe(e.target.checked)}
-            />
-            Wireframe
-          </label>
-          <label
-            className="overlay-toggle"
-            title={bonesAvailable ? "Show skeleton" : "No armature / bones on this asset"}
-          >
-            <input
-              type="checkbox"
-              checked={showBones && bonesAvailable}
-              disabled={!bonesAvailable}
-              onChange={(e) => setShowBones(e.target.checked)}
-            />
-            Bones
-          </label>
-          <label className="overlay-toggle">
-            <input
-              type="checkbox"
-              checked={viewDraft.ground}
-              onChange={(e) => setViewDraft((v) => ({ ...v, ground: e.target.checked }))}
-            />
-            Ground
-          </label>
-          <label className="overlay-toggle">
-            <input
-              type="checkbox"
-              checked={viewDraft.shadows}
-              onChange={(e) => setViewDraft((v) => ({ ...v, shadows: e.target.checked }))}
-            />
-            Shadows
-          </label>
-        </div>
-        {selected && authorPool.length > 0 && (
-          <div className="clip-author" aria-label="Clip authoring">
-            <span className="muted">Author:</span>
-            {authorPool.map((c) => {
-              const disabled = (clipUx.disabled ?? []).includes(c);
-              return (
-                <span key={c} className="author-row">
-                  <strong className={disabled ? "muted" : ""}>{c}</strong>
-                  <button
-                    type="button"
-                    title="Move up"
-                    disabled={disabled}
-                    onClick={() => moveClip(c, -1)}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    title="Move down"
-                    disabled={disabled}
-                    onClick={() => moveClip(c, 1)}
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    title="Set default"
-                    disabled={disabled}
-                    onClick={() => setDefaultClip(c)}
-                  >
-                    ★ default
-                  </button>
-                  <button
-                    type="button"
-                    title={disabled ? "Re-enable" : "Disable"}
-                    onClick={() => toggleDisabled(c)}
-                  >
-                    {disabled ? "Enable" : "Disable"}
-                  </button>
-                </span>
-              );
-            })}
-            <span className="muted persist-note">
-              Persist: asset <code>clipUx</code> (API) + localStorage fallback
-            </span>
-          </div>
-        )}
         {selected && (
           <div className="import-meta-panel" aria-label="Import metadata">
             <div className="import-meta-title">
@@ -2230,6 +1997,254 @@ export function App() {
           </div>
         )}
         {loadError && <p className="viewer-err">{loadError}</p>}
+        </div>
+        <div className="viewer-dock" aria-label="Viewer dock">
+        {selected && authorPool.length > 0 && (
+          <div className="clip-author" aria-label="Clip authoring">
+            <span className="muted">Author:</span>
+            {authorPool.map((c) => {
+              const disabled = (clipUx.disabled ?? []).includes(c);
+              return (
+                <span key={c} className="author-row">
+                  <strong className={disabled ? "muted" : ""}>{c}</strong>
+                  <button
+                    type="button"
+                    title="Move up"
+                    disabled={disabled}
+                    onClick={() => moveClip(c, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    title="Move down"
+                    disabled={disabled}
+                    onClick={() => moveClip(c, 1)}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    title="Set default"
+                    disabled={disabled}
+                    onClick={() => setDefaultClip(c)}
+                  >
+                    ★ default
+                  </button>
+                  <button
+                    type="button"
+                    title={disabled ? "Re-enable" : "Disable"}
+                    onClick={() => toggleDisabled(c)}
+                  >
+                    {disabled ? "Enable" : "Disable"}
+                  </button>
+                </span>
+              );
+            })}
+            <span className="muted persist-note">
+              Persist: asset <code>clipUx</code> (API) + localStorage fallback
+            </span>
+          </div>
+        )}
+        <div className="clip-bar clip-bar-s3c" aria-label="Playback + overlay">
+          <div className="dock-row dock-row-clipux" aria-label="Blend and speed">
+          <label
+            className="blend"
+            title={
+              blendControlEnabled(clipsForUi)
+                ? "Crossfade between clips (0 = hard cut)"
+                : "Blend needs ≥ 2 clips"
+            }
+          >
+            Blend
+            <input
+              type="number"
+              min={0}
+              max={BLEND_MS_MAX}
+              step={50}
+              value={blendMs}
+              disabled={!canPlay || !blendControlEnabled(clipsForUi)}
+              aria-label="Clip blend ms (0–1000)"
+              onChange={(e) => setPlaybackPref({ blendMs: clampBlendMs(e.target.value) })}
+            />
+            ms
+          </label>
+          <label className="speed" title="Playback speed; clipDurations stay raw">
+            Speed
+            <input
+              type="range"
+              min={TIMESCALE_MIN}
+              max={TIMESCALE_MAX}
+              step={TIMESCALE_STEP}
+              value={timeScale}
+              disabled={!canPlay}
+              aria-label="Clip timescale 0.5–2.0"
+              onChange={(e) => setPlaybackPref({ timeScale: clampTimeScale(e.target.value) })}
+            />
+            <span className="muted">{timeScale.toFixed(1)}×</span>
+            <button
+              type="button"
+              className="tiny"
+              disabled={!canPlay || timeScale === TIMESCALE_DEFAULT}
+              onClick={() => setPlaybackPref({ timeScale: TIMESCALE_DEFAULT })}
+            >
+              Reset
+            </button>
+          </label>
+          {canPlay && clip && selected?.clipDurations?.[clip] !== undefined ? (
+            <span className="muted" title="Effective length = raw clipDurations / speed">
+              effective {effectiveDurationMs(selected.clipDurations[clip], timeScale)} ms
+            </span>
+          ) : null}
+          <span className="muted" title="Keys 1–9 select the n-th clip (ignored while typing)">
+            Keys 1–9 = clips
+          </span>
+          </div>
+          <div className="dock-row dock-row-view" aria-label="View">
+            <div className="dock-group" role="group" aria-label="Overlay (session)">
+              <span className="dock-group-title muted">Overlay (session)</span>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={wireframe}
+              onChange={(e) => setWireframe(e.target.checked)}
+            />
+            Wireframe
+          </label>
+          <label
+            className="overlay-toggle"
+            title={bonesAvailable ? "Show skeleton" : "No armature / bones on this asset"}
+          >
+            <input
+              type="checkbox"
+              checked={showBones && bonesAvailable}
+              disabled={!bonesAvailable}
+              onChange={(e) => setShowBones(e.target.checked)}
+            />
+            Bones
+          </label>
+            </div>
+            <span className="dock-divider" aria-hidden="true" />
+            <div className="dock-group" role="group" aria-label="Scene view">
+              <span className="dock-group-title muted">Scene view</span>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={viewDraft.ground}
+              onChange={(e) => setViewDraft((v) => ({ ...v, ground: e.target.checked }))}
+            />
+            Ground
+          </label>
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              checked={viewDraft.shadows}
+              onChange={(e) => setViewDraft((v) => ({ ...v, shadows: e.target.checked }))}
+            />
+            Shadows
+          </label>
+                    </div>
+          </div>
+        </div>
+        <div className="clip-bar">
+          <div className="clip-list" role="listbox" aria-label="Clips">
+            {canPlay ? (
+              clipsForUi.map((c, i) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="option"
+                  aria-selected={clip === c}
+                  className={clip === c ? "clip active" : "clip"}
+                  onClick={() => selectClip(c)}
+                  title={
+                    (clipUx.defaultClip === c ? "Default clip" : "Click to play") +
+                    (hotkeyLabel(i) ? ` · hotkey ${hotkeyLabel(i)}` : "")
+                  }
+                >
+                  {hotkeyLabel(i) ? (
+                    <span className="hotkey" data-testid="clip-hotkey">
+                      {hotkeyLabel(i)}
+                    </span>
+                  ) : null}
+                  {c}
+                  {clipUx.defaultClip === c ? " ★" : ""}
+                </button>
+              ))
+            ) : (
+              <span className="muted empty-clips">
+                No clips on this asset — static empty-state (no demo fallback).
+                {(clipUx.disabled?.length ?? 0) > 0
+                  ? " Re-enable a clip in Author."
+                  : ""}
+              </span>
+            )}
+          </div>
+          <label className="loop-toggle">
+            <input
+              type="checkbox"
+              checked={loop}
+              disabled={!canPlay}
+              onChange={(e) => setLoop(e.target.checked)}
+            />
+            ⟲ loop
+          </label>
+          <label className="clip-select">
+            Clip:{" "}
+            <select
+              value={clip}
+              disabled={!canPlay}
+              onChange={(e) => {
+                setClip(e.target.value);
+                setPlaying(true);
+                setScrub(0);
+              }}
+            >
+              {canPlay ? (
+                clipsForUi.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))
+              ) : (
+                <option value="">(none — static)</option>
+              )}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={!canPlay}
+            onClick={() => setPlaying((p) => !p)}
+            title={canPlay ? "Play / pause" : "No clips — Play disabled"}
+          >
+            {playing && canPlay ? "Pause" : "▶ Play"}
+          </button>
+          <label className="scrub">
+            Timeline
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.001}
+              value={scrub}
+              disabled={!canPlay || duration <= 0}
+              aria-label="Scrub active clip 0–1"
+              onMouseDown={() => setScrubbing(true)}
+              onTouchStart={() => setScrubbing(true)}
+              onMouseUp={() => setScrubbing(false)}
+              onTouchEnd={() => setScrubbing(false)}
+              onChange={(e) => {
+                setScrub(Number(e.target.value));
+                setScrubbing(true);
+              }}
+            />
+            <span className="muted">
+              {duration > 0 ? `${(scrub * duration).toFixed(2)}s` : "—"}
+            </span>
+          </label>
+          <span className="meta">Format: {formatLabel}</span>
+        </div>
+        </div>
       </div>
     </div>
   );
