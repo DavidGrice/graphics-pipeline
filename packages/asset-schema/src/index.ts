@@ -194,6 +194,21 @@ export function maxGlbBytes(mb: number): number {
   return mb * 1024 * 1024;
 }
 
+const timingMs = z.number().int().min(0).max(86_400_000);
+/**
+ * S3-E #66 — fixed key set; `total` = export + probe + copy (register is in timings.json only,
+ * it is not known until the POST returns). `probeCache` feeds the #94 history-row tooltip.
+ */
+export const ImportTimingsSchema = z
+  .object({
+    export: timingMs.optional(),
+    probe: timingMs,
+    copy: timingMs,
+    total: timingMs,
+    probeCache: z.enum(["hit", "miss", "off"]),
+  })
+  .strict();
+
 export const ImportMetaSchema = z.object({
   source: z.enum(["mixamo", "fbx", "png_pipeline", "unknown"]),
   warnings: z.array(ImportWarningSchema).max(50).optional(),
@@ -202,6 +217,9 @@ export const ImportMetaSchema = z.object({
   boneMapStub: z.string().optional(),
   characterTypeHint: z.enum(["humanoid", "prop", "unknown"]).optional(),
   humanoidPngApproved: z.boolean().optional(),
+  // S3-E #66 — optional mirror of timings.json (integer ms; additive, schema version stays 3).
+  // Written by register_asset.mjs only when importMeta already exists; never in goldens.
+  timingsMs: ImportTimingsSchema.optional(),
 });
 
 /**

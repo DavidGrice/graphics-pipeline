@@ -57,6 +57,14 @@ fi
 
 mkdir -p "$(dirname "${OUT_GLB}")"
 
+# S3-E #66 — integer wall-clock ms (GNU date %3N; second resolution where unsupported).
+now_ms() {
+  local t
+  t="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "${t}" =~ ^[0-9]+$ ]]; then echo "${t}"; else echo $(( $(date +%s) * 1000 )); fi
+}
+EXPORT_T0="$(now_ms)"
+
 # Blender's exit status propagates (set -e); then the export size gate.
 "${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))"
 
@@ -67,4 +75,9 @@ if [[ -f "${OUT_GLB}" ]]; then
     echo "ERROR GLB_TOO_LARGE: ${GLB_BYTES} bytes > ${MAX_BYTES} (MAX_GLB_MB=${MAX_GLB_MB})" >&2
     exit 4
   fi
+  # S3-E #66 — timings.json beside the exported GLB (fixed key set; register_asset.mjs fills
+  # probe/copy/register when it registers this GLB). Never part of goldens (hashes are GLB-only).
+  EXPORT_MS=$(( $(now_ms) - EXPORT_T0 ))
+  printf '{"stages":{"export":%d,"probe":null,"copy":null,"register":null},"totalMs":%d,"probeCache":null}\n' \
+    "${EXPORT_MS}" "${EXPORT_MS}" > "$(dirname "${OUT_GLB}")/timings.json"
 fi

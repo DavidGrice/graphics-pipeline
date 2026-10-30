@@ -42,6 +42,8 @@ data/inbox/**
 !data/inbox/.gitkeep
 data/assets/**
 !data/assets/.gitkeep
+# S3-E #134 — probe cache (DATA_ROOT/cache/probe/<sha256>.json), never committed
+data/cache/
 
 # Media / 3D / DCC (accidental drops; no binary fixtures preferred)
 *.png
