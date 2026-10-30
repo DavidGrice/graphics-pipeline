@@ -23,6 +23,7 @@ export const NON_CODES = new Set([
   "KRITA_FP_TOKEN",
   "MAX_GLB_MB",
   "RATE_LIMIT_PER_MIN",
+  "SCENE_MAX_NODES",
   "SMOKE_MODE",
   "TRUST_PROXY",
 ]);

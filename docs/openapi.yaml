@@ -14,7 +14,11 @@ info:
     default 60) -> 429 RATE_LIMITED {retryAfterSec} + Retry-After header; GET/HEAD/OPTIONS never.
     CORS is an exact-origin allowlist (CORS_ORIGINS, default http://localhost:5173 and
     http://127.0.0.1:5173; never "*"); a disallowed preflight -> 403 CORS_ORIGIN_DENIED.
-    Invalid RATE_LIMIT_PER_MIN / CORS_ORIGINS / TRUST_PROXY / MAX_GLB_MB -> CONFIG_INVALID, no start.
+    Invalid RATE_LIMIT_PER_MIN / CORS_ORIGINS / TRUST_PROXY / MAX_GLB_MB / SCENE_MAX_NODES -> CONFIG_INVALID, no start.
+    S3-E E2: scene nodes may carry `deleted: true` (tombstone; false is normalised away). Live nodes are
+    capped by SCENE_MAX_NODES (default 256) -> 400 SCENE_NODES_MAX {max,count}; tombstoning the root ->
+    400 SCENE_ROOT_DELETE; no live nodes left -> 400 SCENE_NO_LIVE_NODES. GET /api/health adds
+    limits.sceneMaxNodes.
 servers:
   - url: http://127.0.0.1:8787
     description: Local world-builder
@@ -163,7 +167,7 @@ paths:
         "404":
           description: Not found
         "409":
-          description: ASSET_IN_USE {refs} - still referenced by a scene
+          description: ASSET_IN_USE {refs, deletedRefs} - still referenced by a scene (tombstoned nodes still block; deletedRefs = scenes referencing it only via deleted nodes)
   /api/assets/{id}/clip-ux:
     patch:
       summary: Patch clipUx only
