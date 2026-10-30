@@ -3,11 +3,26 @@
  */
 import fs from "node:fs";
 
-/** Minimal GLB JSON-chunk probe (no deps). */
+/** S3-D tip1.1 NIT-1 — stable code for unreadable GLBs (register_asset exits 5). */
+export const GLB_CORRUPT = "GLB_CORRUPT";
+
+/** Error with `.code = GLB_CORRUPT`; message never contains a filesystem path. */
+export function glbCorrupt(reason) {
+  const err = new Error(`${GLB_CORRUPT}: ${reason}`);
+  err.code = GLB_CORRUPT;
+  err.reason = reason;
+  return err;
+}
+
+/** Minimal GLB JSON-chunk probe (no deps). Throws glbCorrupt(...) on bad/truncated input. */
 export function probeGlb(filePath) {
   const buf = fs.readFileSync(filePath);
-  if (buf.length < 20 || buf.toString("utf8", 0, 4) !== "glTF") {
-    throw new Error(`not a GLB: ${filePath}`);
+  if (buf.length < 12 || buf.toString("latin1", 0, 4) !== "glTF") {
+    throw glbCorrupt("bad magic (not a GLB)");
+  }
+  if (buf.length < 20) throw glbCorrupt(`truncated (${buf.length} bytes, no chunk header)`);
+  if (buf.readUInt32LE(8) > buf.length) {
+    throw glbCorrupt(`truncated (header length ${buf.readUInt32LE(8)} > ${buf.length} bytes)`);
   }
   let offset = 12;
   let jsonChunk = null;
@@ -19,13 +34,18 @@ export function probeGlb(filePath) {
     offset += 8;
     const chunk = buf.subarray(offset, offset + clen);
     offset += clen;
+    if (offset > buf.length) throw glbCorrupt(`truncated ${ctype.replace(/\0/g, "")} chunk`);
     if (ctype === "JSON" && !jsonChunk) {
-      jsonChunk = JSON.parse(chunk.toString("utf8"));
+      try {
+        jsonChunk = JSON.parse(chunk.toString("utf8"));
+      } catch {
+        throw glbCorrupt("JSON chunk is not valid JSON");
+      }
     } else if (ctype === "BIN\0" && !binChunk) {
       binChunk = chunk;
     }
   }
-  if (!jsonChunk) throw new Error("GLB missing JSON chunk");
+  if (!jsonChunk) throw glbCorrupt("missing JSON chunk");
   const animations = (jsonChunk.animations || []).map((a) => a.name || "unnamed");
   const skins = jsonChunk.skins || [];
   let hasWeights = false;

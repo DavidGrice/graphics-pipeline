@@ -5,12 +5,13 @@
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
  *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
+ * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { probeGlb, assertSingleArmature, IDLE_TPOSE_SUSPECT } from "./probe_glb.mjs";
+import { probeGlb, assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
 import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
 
@@ -139,7 +140,15 @@ if (importMetaPath) {
   }
 }
 
-const probed = probeGlb(glbAbs);
+// S3-D tip1.1 NIT-1 — truncated / bad-magic / unparsable GLB → one clean line, exit 5.
+let probed;
+try {
+  probed = probeGlb(glbAbs);
+} catch (err) {
+  const reason = err?.code === GLB_CORRUPT ? err.reason : "unreadable GLB";
+  console.error(`ERROR ${GLB_CORRUPT}: ${path.basename(glbAbs)}: ${reason} — not registered`);
+  process.exit(5);
+}
 console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
 );

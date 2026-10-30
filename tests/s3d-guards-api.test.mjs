@@ -314,3 +314,41 @@ test("R1 nit: fs error on file/preview routes → 500 {code:INTERNAL, error:'int
     assert.match(b.text, /"code":"[A-Z][A-Z0-9_]+"/, `${b.label} is not a {code,error} JSON body: ${b.text}`);
   }
 });
+
+test("NIT-1 register_asset: truncated / bad-magic / bad-JSON GLB → exit 5, one clean GLB_CORRUPT line", () => {
+  const ABS = /(^|[\s'"])\/(home|workspace|tmp|etc|usr|var)\//;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "s3d-nit1-"));
+  try {
+    const good = makeRiggedGlb();
+    const jsonLen = good.readUInt32LE(12);
+    const badJson = Buffer.from(good);
+    badJson.write("{", 20 + 1, "latin1"); // corrupt the JSON chunk body in place
+    const cases = {
+      "truncated.glb": good.subarray(0, Math.floor(good.length / 2)),
+      "header-only.glb": good.subarray(0, 16),
+      "bad-magic.glb": Buffer.concat([Buffer.from("gLTx"), good.subarray(4)]),
+      "text.glb": Buffer.from("this is not a binary glTF file at all\n"),
+      "bad-json.glb": badJson,
+    };
+    assert.ok(jsonLen > 2);
+    for (const [name, bytes] of Object.entries(cases)) {
+      const f = path.join(dir, name);
+      fs.writeFileSync(f, bytes);
+      const r = spawnSync(
+        process.execPath,
+        [path.join(ROOT, "apps/blender-pipeline/register_asset.mjs"), "--glb", f, "--api", "http://127.0.0.1:9"],
+        { env: { ...process.env, WB_DATA_ROOT: dir }, encoding: "utf8" },
+      );
+      assert.equal(r.status, 5, `${name}: ${r.stderr}`);
+      const lines = r.stderr.trim().split("\n");
+      assert.equal(lines.length, 1, `${name}: expected one stderr line, got:\n${r.stderr}`);
+      assert.match(lines[0], new RegExp(`^ERROR GLB_CORRUPT: ${name.replace(".", "\\.")}: .+ — not registered$`));
+      assert.doesNotMatch(r.stderr, /\n\s+at |Error:|SyntaxError/, `${name}: stack trace leaked`);
+      assert.doesNotMatch(r.stderr, ABS, `${name}: absolute path leaked`);
+      assert.ok(!r.stderr.includes(dir), `${name}: tmp path leaked`);
+      assert.ok(!fs.existsSync(path.join(dir, "assets")), `${name}: nothing copied before the probe`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
