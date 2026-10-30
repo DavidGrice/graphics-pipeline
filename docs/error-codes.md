@@ -76,6 +76,7 @@ Warn-only entries in `importMeta.warnings[]` (`{code, message?, detail?, clip?}`
 
 | code | HTTP / exit | where raised | meaning | fix hint |
 |---|---|---|---|---|
+| `CHANGELOG_RANGE` | exit 2 | `scripts/changelog.mjs` via `npm run changelog -- <base>..<tip>` | A range end is missing, not a commit, looks like an option, or the range uses `...`; nothing printed to stdout | Pass two existing commits: `<base>..<tip>` (or `<base> [tip]`) |
 | `CONFIG_INVALID` | exit 2 | `register_asset.mjs`, `import_pack.mjs` (before any probe) | `PROBE_CACHE` is not `0` or `1` (unset = on); one line `ERROR CONFIG_INVALID: PROBE_CACHE must be 0 or 1`, value never echoed | Set `PROBE_CACHE=0` (off) or `1` / unset (on) |
 | `E_BLENDER_BIN_MISSING` | exit 2 | `golden.mjs` via `npm run golden:refresh` | `BLENDER_BIN` points at a missing file | Fix the path (fail-closed, no PATH fallback) |
 | `E_BLENDER_BIN_UNSET` | exit 2 | `golden.mjs` via `npm run golden:refresh` | `BLENDER_BIN` not set | `BLENDER_BIN=/path/to/blender` |
@@ -88,8 +89,11 @@ Warn-only entries in `importMeta.warnings[]` (`{code, message?, detail?, clip?}`
 | `E_GOLDEN_UNSTABLE` | exit 3 | `golden:refresh` | Two exports of the same input differ; nothing written | Find the nondeterminism (seed, timestamps) |
 | `GLB_CORRUPT` | exit 5 | `register_asset.mjs` | Corrupt / truncated / bad-magic GLB; one clean `ERROR GLB_CORRUPT:` line, no stack | Re-export the GLB |
 | `GLB_TOO_LARGE` | exit 4 | `register_asset.mjs`, `pipeline.sh` | GLB over `MAX_GLB_MB`; not probed, not registered | Shrink the GLB or raise `MAX_GLB_MB` |
+| `LINT_FAILED` | exit 1 | `scripts/lint-ci.mjs` via `npm run lint:ci` (CI `lint + secrets` job) | actionlint (`.github/workflows`) or shellcheck (tracked `*.sh`, severity ≥ warning) reported findings, printed above the line | Fix the finding; `# shellcheck disable=SCxxxx` only with a reason comment |
 | `PATH_OUTSIDE_INBOX` | exit 2 | `run_mvp.sh` | Bad slug (not kebab) or inbox entry resolving outside `data/inbox` | Use a kebab slug and a real file under `data/inbox/` |
 | `RATE_LIMITED` | exit 1 | `register_asset.mjs` | API answered 429; prints `retry in <N>s`; nothing retried, no files left behind | Re-run after N seconds (or raise `RATE_LIMIT_PER_MIN` on the API) |
+| `SECRETS_FOUND` | exit 1 | `scripts/scan-secrets.mjs` via `npm run scan:secrets` (CI `lint + secrets` job) | gitleaks found a secret in git history; one line per finding (rule, file:line, short commit), secret redacted | Rotate the secret, then rewrite history; only `tests/fixtures/**` may be allowlisted (`.gitleaks.toml`) |
+| `SECRETS_SCAN_FAILED` | exit 2 | `scripts/scan-secrets.mjs` | gitleaks itself failed (bad config, not a git repo, crashed) — fail-closed, never reported as clean | Run `gitleaks git --config .gitleaks.toml .` to see the error |
 | `SLUG_CLASH` | exit 1 | `register_asset.mjs` | Slug owned by another id; prints `retry with --slug <suggested>`; no files left behind | Re-run with the suggested slug |
 | (no code) | exit 2 | `pipeline.sh` / `run_mvp.sh` `--seed`, `register_asset.mjs`, `pipeline.sh` | Bad `SEED` / `--seed` (non-integer or out of range) or bad `MAX_GLB_MB` (not an integer ≥ 1) | Pass a valid integer |
 
@@ -106,4 +110,4 @@ Every skip reason starts with one of these codes (#104). `npm run test:s1` ends 
 | `SKIP_NO_KRITA` | skip | reserved for Krita-live checks | Krita / bridge not running | Start Krita with the bridge |
 | `SKIP_NO_MONGO` | skip | reserved for Mongo-only checks | Mongo not reachable | Start Mongo / set `MONGO_URI` |
 | `SKIP_NO_UI_URL` | skip | browser checks | `UI_URL` (vite) not set | `UI_URL=http://localhost:<port>` with vite + API up |
-| `SKIP_PLATFORM` | skip | bash-based tests, browser checks | Host lacks a tool: bash (Windows), `playwright-core`, or Chrome | Install it, or set `PLAYWRIGHT_CORE_DIR` / `CHROME_BIN` |
+| `SKIP_PLATFORM` | skip | bash-based tests, browser checks; `npm run scan:secrets` / `npm run lint:ci` (exit 0) | Host lacks a tool: bash (Windows), `playwright-core`, Chrome, `gitleaks`, `actionlint` or `shellcheck` | Install it, or set `PLAYWRIGHT_CORE_DIR` / `CHROME_BIN` / `GITLEAKS_BIN` / `ACTIONLINT_BIN` / `SHELLCHECK_BIN` |
