@@ -295,5 +295,6 @@ test("T1.6 #19 soft-env :8787 POST armatureCount 2 → 400 MULTI_ARMATURE", asyn
   assert.equal(r.status, 400);
   assert.match(await r.text(), /MULTI_ARMATURE/);
   const g = await fetch(`${API}/api/assets/${id}`);
+  if (g.status !== 404) await fetch(`${API}/api/assets/${id}`, { method: "DELETE" }); // never leave orphans
   assert.equal(g.status, 404, "rejected asset not stored");
 });

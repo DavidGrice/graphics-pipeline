@@ -3,7 +3,7 @@
  * #26 duplicate · #31 view (ground/shadows) · #32 orbit bookmarks.
  * Pure helpers (transpiled TS) + schema gates + App.tsx wiring + soft-env :8787 round-trip.
  */
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -263,13 +263,31 @@ async function apiUp() {
 }
 const json = (method, body) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+/** Assets this file registers on :8787 — deleted in after() (scenes first, then children). */
+const registered = { scenes: [], assets: [] };
+async function post(asset) {
+  const r = await fetch(`${API}/api/assets`, json("POST", asset));
+  if (r.status === 201) (asset.stage === "scene" ? registered.scenes : registered.assets).push(asset.id);
+  return r;
+}
+after(async () => {
+  if (!registered.scenes.length && !registered.assets.length) return;
+  for (const id of [...registered.scenes, ...registered.assets]) {
+    try {
+      await fetch(`${API}/api/assets/${id}`, { method: "DELETE" });
+    } catch {
+      /* API went away — nothing persisted in memory mode */
+    }
+  }
+});
+
 test("T1.4 soft-env :8787 clip-ux blend/timescale round-trip; out of range 400; clipDurations untouched", async (t) => {
   if (!(await apiUp())) {
     t.skip("world-builder not listening on :8787 (soft-env)");
     return;
   }
   const id = randomUUID();
-  const created = await fetch(`${API}/api/assets`, json("POST", childAsset(id, `s3c-ux-${id.slice(0, 8)}`)));
+  const created = await post(childAsset(id, `s3c-ux-${id.slice(0, 8)}`));
   assert.equal(created.status, 201, await created.clone().text());
   for (const bad of [{ blendMs: 1001 }, { blendMs: -1 }, { timeScale: 0.4 }, { timeScale: 3 }, { timeScale: "fast" }, { clipDurations: { idle: 1 } }]) {
     const r = await fetch(`${API}/api/assets/${id}/clip-ux`, json("PATCH", bad));
@@ -290,8 +308,8 @@ test("T1.5 soft-env :8787 scene view + cameras persist; 17th camera 400; NaN 400
   }
   const cid = randomUUID();
   const sid = randomUUID();
-  assert.equal((await fetch(`${API}/api/assets`, json("POST", childAsset(cid, `s3c-c-${cid.slice(0, 8)}`)))).status, 201);
-  const sc = await fetch(`${API}/api/assets`, json("POST", sceneAsset({ version: 1, nodes: nodes(cid) }, sid, `s3c-s-${sid.slice(0, 8)}`)));
+  assert.equal((await post(childAsset(cid, `s3c-c-${cid.slice(0, 8)}`))).status, 201);
+  const sc = await post(sceneAsset({ version: 1, nodes: nodes(cid) }, sid, `s3c-s-${sid.slice(0, 8)}`));
   assert.equal(sc.status, 201, await sc.clone().text());
 
   const dup = V.duplicateSceneNode(nodes(cid), "n0", { newId: randomUUID() });
@@ -312,4 +330,24 @@ test("T1.5 soft-env :8787 scene view + cameras persist; 17th camera 400; NaN 400
   assert.equal(nan.status, 400);
   const after = await (await fetch(`${API}/api/assets/${sid}`)).json();
   assert.equal(after.scene.cameras.length, 16, "rejected PATCH did not persist");
+});
+
+test("tip3 soft-env :8787 DELETE /api/assets/:id: 404 unknown, 409 while scene references, 204 then gone", async (t) => {
+  if (!(await apiUp())) {
+    t.skip("world-builder not listening on :8787 (soft-env)");
+    return;
+  }
+  const cid = randomUUID();
+  const sid = randomUUID();
+  assert.equal((await fetch(`${API}/api/assets/${randomUUID()}`, { method: "DELETE" })).status, 404);
+  assert.equal((await post(childAsset(cid, `s3c-del-c-${cid.slice(0, 8)}`))).status, 201);
+  assert.equal((await post(sceneAsset({ version: 1, nodes: nodes(cid) }, sid, `s3c-del-s-${sid.slice(0, 8)}`))).status, 201);
+  const blocked = await fetch(`${API}/api/assets/${cid}`, { method: "DELETE" });
+  assert.equal(blocked.status, 409, "child referenced by scene");
+  assert.equal((await fetch(`${API}/api/assets/${sid}`, { method: "DELETE" })).status, 204);
+  assert.equal((await fetch(`${API}/api/assets/${cid}`, { method: "DELETE" })).status, 204);
+  assert.equal((await fetch(`${API}/api/assets/${cid}`)).status, 404);
+  assert.equal((await fetch(`${API}/api/assets/${sid}`)).status, 404);
+  registered.scenes = registered.scenes.filter((x) => x !== sid);
+  registered.assets = registered.assets.filter((x) => x !== cid);
 });
