@@ -4,6 +4,7 @@
 # MODE / SMOKE_MODE: billboard (default) | rigged — passed as --mode to png_to_glb.
 # SEED (S3-C #63): integer 0..2147483647, default 0 — passed as --seed.
 # Non-integer / out-of-range SEED → exit 2 (R1 HARDEN).
+# MAX_GLB_MB (S3-D #76): exported GLB larger than the cap → exit 4 GLB_TOO_LARGE.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,6 +48,23 @@ if [[ ! "${SEED}" =~ ^[0-9]+$ ]] || (( ${#SEED} > 10 )) || (( 10#${SEED} > 21474
   exit 2
 fi
 
+# S3-D #76 — MAX_GLB_MB (default 100, integer >= 1); invalid → exit 2 (fail-closed).
+MAX_GLB_MB="${MAX_GLB_MB:-100}"
+if [[ ! "${MAX_GLB_MB}" =~ ^[0-9]+$ ]] || (( ${#MAX_GLB_MB} > 7 )) || (( 10#${MAX_GLB_MB} < 1 )); then
+  echo "ERROR: MAX_GLB_MB must be an integer >= 1 (got: ${MAX_GLB_MB})" >&2
+  exit 2
+fi
+
 mkdir -p "$(dirname "${OUT_GLB}")"
 
-exec "${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))"
+# Blender's exit status propagates (set -e); then the export size gate.
+"${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))"
+
+if [[ -f "${OUT_GLB}" ]]; then
+  GLB_BYTES="$(wc -c < "${OUT_GLB}" | tr -d ' ')"
+  MAX_BYTES=$(( 10#${MAX_GLB_MB} * 1024 * 1024 ))
+  if (( GLB_BYTES > MAX_BYTES )); then
+    echo "ERROR GLB_TOO_LARGE: ${GLB_BYTES} bytes > ${MAX_BYTES} (MAX_GLB_MB=${MAX_GLB_MB})" >&2
+    exit 4
+  fi
+fi

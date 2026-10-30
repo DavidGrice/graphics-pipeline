@@ -5,6 +5,9 @@ info:
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
+    S3-D (R1 rev2 §0): every 4xx/5xx JSON body is `Error` — flat `{ code, error, ...extra }`.
+    Bodies never carry absolute filesystem paths (repo-relative `rel` only).
+    MAX_GLB_MB (env, default 100, integer >= 1; invalid -> server refuses to start).
 servers:
   - url: http://127.0.0.1:8787
     description: Local world-builder
@@ -45,6 +48,14 @@ paths:
           description: Unknown stage
     post:
       summary: Register / upsert asset (schema + scene V4 gates)
+      description: |
+        S3-D #141 - formats.{glb,fbx,obj,preview} must resolve (realpath) under DATA_ROOT and
+        formats.sourcePng under data/inbox; `..`, absolute, %2e%2e, NUL or symlink escape -> 400
+        PATH_OUTSIDE_INBOX (input/resolved path not echoed). #76 - formats.glb larger than
+        MAX_GLB_MB -> 413 GLB_TOO_LARGE {sizeBytes, maxBytes}, checked before schema/probe.
+        #49/#97 - importMeta.warnings[] {code, message?, detail?, clip?} is warn-only
+        (PNG_ALPHA_PREMULT_SUSPECT, IDLE_TPOSE_SUSPECT); a humanoid whose only idle carries
+        IDLE_TPOSE_SUSPECT fails the humanoid clips gate (400 VALIDATION).
       requestBody:
         required: true
         content:
@@ -55,7 +66,15 @@ paths:
         "201":
           description: Created/upserted
         "400":
-          description: Validation failed
+          description: VALIDATION / MULTI_ARMATURE / SCENE_CAMERAS_MAX / SCENE_RESOLVE / PATH_OUTSIDE_INBOX
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: GLB_TOO_LARGE
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlbTooLarge" }
   /api/assets/{id}:
     get:
       summary: Get asset by id
@@ -106,7 +125,7 @@ paths:
         "404":
           description: Not found
         "409":
-          description: Still referenced by a scene
+          description: ASSET_IN_USE {refs} - still referenced by a scene
   /api/assets/{id}/clip-ux:
     patch:
       summary: Patch clipUx only
@@ -151,8 +170,10 @@ paths:
       responses:
         "200":
           description: File bytes
+        "400":
+          description: PATH_OUTSIDE_INBOX (stored path escapes DATA_ROOT)
         "404":
-          description: Missing
+          description: NOT_FOUND / FILE_MISSING {rel} (no absolute path)
   /api/assets/{id}/preview:
     get:
       summary: Preview PNG
@@ -164,8 +185,10 @@ paths:
       responses:
         "200":
           description: PNG
+        "400":
+          description: PATH_OUTSIDE_INBOX (stored path escapes DATA_ROOT)
         "404":
-          description: Missing
+          description: FILE_MISSING {rel} (no absolute path)
   /api/openapi.json:
     get:
       summary: This OpenAPI document as JSON (parsed from docs/openapi.yaml)
@@ -182,3 +205,19 @@ paths:
           description: OpenAPI YAML
           content:
             application/yaml: {}
+components:
+  schemas:
+    Error:
+      type: object
+      required: [code, error]
+      properties:
+        code: { type: string, pattern: "^[A-Z][A-Z0-9_]+$" }
+        error: { type: string, description: Human text (back-compat string) }
+      additionalProperties: true
+    GlbTooLarge:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            sizeBytes: { type: integer }
+            maxBytes: { type: integer }
