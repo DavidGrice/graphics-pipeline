@@ -8,8 +8,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
-import { safeParseAsset } from "@graphics-pipeline/asset-schema";
+import { safeParseAsset, ClipUxSchema } from "@graphics-pipeline/asset-schema";
 import { validateSceneChildren } from "./sceneResolve.js";
+import { registerOpenApiRoutes } from "./openapi.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -473,6 +474,20 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
         ? body.disabled.filter((x) => typeof x === "string")
         : undefined,
     };
+    // S3-C #1 / #2 — viewer blend + timescale prefs (validated; out of range → 400).
+    for (const key of ["blendMs", "timeScale"]) {
+      if (Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined) {
+        clipUx[key] = body[key];
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
+      return res.status(400).json({ error: "clip-ux cannot modify clipDurations (probe-only write)" });
+    }
+    const uxParsed = ClipUxSchema.safeParse(clipUx);
+    if (!uxParsed.success) {
+      const msg = uxParsed.error.issues.map((i) => i.message).join("; ");
+      return res.status(400).json({ error: msg, issues: uxParsed.error.issues });
+    }
     const col = collection();
     const existing = col
       ? await col.findOne({ id })
@@ -489,6 +504,35 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
       memoryAssets.set(id, next);
     }
     res.json(next);
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+/**
+ * S3-C tip3 — DELETE /api/assets/:id (metadata only; test cleanup + orphan removal).
+ * 409 when a stage=scene asset still references it (keeps V4 integrity).
+ * Never deletes data/** files (media lifecycle stays with the pipeline).
+ */
+app.delete("/api/assets/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const col = collection();
+    const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
+    if (!existing) return res.status(404).json({ error: "not found" });
+    const all = col ? await col.find({ stage: "scene" }).toArray() : [...memoryAssets.values()];
+    const refs = all
+      .filter((d) => d.stage === "scene" && d.id !== id)
+      .filter((d) =>
+        (d.scene?.nodes ?? []).some((n) => n.assetId === id || n.assetId === existing.slug),
+      )
+      .map((d) => d.id);
+    if (refs.length) {
+      return res.status(409).json({ error: `asset referenced by scene(s): ${refs.join(", ")}`, refs });
+    }
+    if (col) await col.deleteOne({ id });
+    else memoryAssets.delete(id);
+    res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -543,14 +587,8 @@ app.get("/api/assets/:id/preview", async (req, res) => {
 });
 
 
-app.get("/api/openapi.json", (_req, res) => {
-  const yamlPath = path.join(REPO_ROOT, "docs", "openapi.yaml");
-  if (!fs.existsSync(yamlPath)) {
-    return res.status(404).json({ error: "docs/openapi.yaml missing" });
-  }
-  // Stub: return raw YAML as text with hint; full JSON convert is stretch
-  res.type("text/yaml").send(fs.readFileSync(yamlPath, "utf8"));
-});
+// S3-C openapi fix: JSON at .json (application/json), YAML at .yaml (application/yaml)
+registerOpenApiRoutes(app, REPO_ROOT);
 
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 

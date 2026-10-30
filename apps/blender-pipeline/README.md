@@ -76,3 +76,25 @@ GitHub Actions job `blender-smoke` (matrix rows A/B) downloads **Blender 5.2.3 L
 | `S2D_STAGE_EXPECT` | `mvp-billboard` | `rigged` |
 
 Fail-closed if Blender missing or assert mismatches. Unit `build-test` stays Blender-free.
+
+## S3-C — `--seed` + golden hashes (#63 / #62r)
+
+- `png_to_glb.py ... --seed <int>` (or `SEED=<int>` for `pipeline.sh`), range `0..2147483647`, default `0`.
+  Seed `0` = canonical Actions (byte-identical to pre-S3-C output); non-zero seeds apply a seeded
+  ±10% keyframe-amplitude jitter. Same seed + same input + same Blender version ⇒ identical GLB sha256.
+- Goldens: `testdata/golden/hashes.json` (sha256 only — never GLB/PNG bytes). Each entry records
+  `mode`, `seed`, `blenderVersion`, `inputSha256`. Refresh intentionally:
+  `BLENDER_BIN=/home/box/tools/blender npm run golden:refresh` (exits 2 when `BLENDER_BIN` unset —
+  fail-closed). Verify without writing: `node scripts/refresh-goldens.mjs --check`.
+- Drift assert: `BLENDER_BIN=... npm run test:golden` (skips with an explicit reason when `BLENDER_BIN`
+  unset; fails when set to a missing path; PLACEHOLDER/tampered hash ⇒ fail).
+
+### S3-C tip2 HARDEN (R1)
+
+- Non-integer / out-of-range seed → **exit 2** (`pipeline.sh` and `png_to_glb.py`); default seed `0`.
+  `run_mvp.sh` / `smoke_live.sh` accept `--seed <int>` / `--seed=<int>` (or `SEED`).
+- `golden:refresh` exports every entry **twice** in clean dirs and refuses to write unless both
+  sha256 match (`E_GOLDEN_UNSTABLE`, exit 3). Entries record `fixture`, `generatedBy`, `stableRuns: 2`.
+- Blender version ≠ recorded `blenderVersion` → `E_GOLDEN_BLENDER_VERSION` (distinct from content
+  drift `E_GOLDEN_DRIFT`); `--check` exits **2** on version mismatch, 1 on content drift.
+- `GP_GOLDEN_PATH` overrides the golden file path (tests only; tracked file never rewritten by tests).

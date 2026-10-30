@@ -75,16 +75,22 @@ button.primary {
 .viewer {
   position: relative;
   min-height: 0;
+  /* S3-C #82: header + stage (canvas + floating panels) + in-flow bottom dock */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.viewer-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .viewer canvas {
   width: 100% !important;
   height: 100% !important;
 }
 .clip-bar {
-  position: absolute;
-  bottom: 1rem;
-  left: 1rem;
-  right: 1rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -104,6 +110,7 @@ button.primary {
 }
 .viewer-err {
   position: absolute;
+  z-index: 3;
   top: 1rem;
   left: 1rem;
   color: #f88;
@@ -156,10 +163,6 @@ button, select { font: inherit; }
 .scrub { font-size: 0.8rem; display: flex; align-items: center; gap: 0.4rem; flex: 1; min-width: 140px; }
 .scrub input[type="range"] { flex: 1; }
 .clip-author {
-  position: absolute;
-  bottom: 4.2rem;
-  left: 1rem;
-  right: 1rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -181,8 +184,11 @@ button, select { font: inherit; }
 .import-meta-panel,
 .scene-stub-panel {
   position: absolute;
-  top: 3.2rem;
+  top: 0.75rem;
   right: 1rem;
+  max-height: calc(50% - 1rem);
+  overflow-y: auto;
+  box-sizing: border-box;
   max-width: 320px;
   background: rgba(0, 0, 0, 0.72);
   border: 1px solid #2a3140;
@@ -194,7 +200,7 @@ button, select { font: inherit; }
   flex-direction: column;
   gap: 0.35rem;
 }
-.scene-stub-panel { top: auto; bottom: 4.2rem; right: 1rem; left: auto; max-width: 360px; }
+.scene-stub-panel { top: auto; bottom: 0.75rem; right: 1rem; left: auto; max-width: 360px; }
 .import-meta-title {
   font-size: 0.72rem;
   text-transform: uppercase;
@@ -327,7 +333,7 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .stats-panel {
   position: absolute;
-  top: 3.2rem;
+  top: 0.75rem;
   left: 1rem;
   max-width: 220px;
   background: rgba(0, 0, 0, 0.72);
@@ -346,3 +352,74 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 .viewer:fullscreen .viewer-header {
   z-index: 4;
 }
+
+/* S3-C #21 — CharacterType badge in register list (text label always present) */
+.asset .badge.ctype { margin-left: 0.4rem; font-size: 0.7rem; vertical-align: middle; }
+.badge.ctype-accent { border-color: #e0a030; color: #ffd27a; }
+.badge.ctype-neutral { border-color: #6a7a8a; color: #c8d2dc; }
+.badge.ctype-muted { border-color: #444; color: #889; opacity: 0.8; }
+.badge.ctype-scene { border-color: #5b6cff; color: #b8c0ff; }
+
+/* S3-C #82 — bottom dock: ONE in-flow flex column (Designer s3c-82-dock-layout.md).
+   No absolute offsets on any row; a wrapping row pushes later rows down. */
+.viewer-dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 45vh;
+  overflow-y: auto;
+  padding: 6px 1rem 8px;
+  background: #0e1118;
+  border-top: 1px solid #2a3140;
+  position: relative;
+  z-index: 4;
+}
+.viewer-dock > .clip-bar,
+.viewer-dock > .clip-author,
+.viewer-dock .dock-row {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0;
+}
+.viewer-dock > .clip-bar,
+.viewer-dock > .clip-author {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+}
+/* rows 2+3 share one wrapper (.clip-bar-s3c) stacked as a column */
+.viewer-dock > .clip-bar.clip-bar-s3c {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.viewer-dock .clip-list { flex: 0 1 auto; }
+.viewer-dock .persist-note { margin-left: auto; }
+.dock-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.dock-group-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.dock-divider { width: 1px; align-self: stretch; min-height: 24px; background: #2a3140; }
+.dock-row label { display: inline-flex; align-items: center; gap: 0.3rem; }
+/* ≥ 24×24 hit targets: the label wraps the checkbox */
+.overlay-toggle {
+  min-height: 24px;
+  min-width: 24px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.overlay-toggle input[type="checkbox"] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+.overlay-toggle:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* S3-C #1/#2/#80/#82/#31 — playback + overlay bar */
+.clip-bar-s3c { gap: 0.75rem; flex-wrap: wrap; }
+.clip-bar-s3c input[type="number"] { width: 4.5rem; margin: 0 0.25rem; }
+.clip .hotkey {
+  display: inline-block; min-width: 1.1em; margin-right: 0.3em; padding: 0 0.2em;
+  border: 1px solid #555; border-radius: 3px; font-size: 0.7em; color: #aab;
+}
+.overlay-toggle { display: inline-flex; gap: 0.3rem; align-items: center; }

@@ -1,12 +1,18 @@
 #!/usr/bin/env node
-/** Write tests/fixtures/smoke-8x8.png if missing (CI / local). */
+/**
+ * Write tests/fixtures/smoke-8x8.png if missing (CI / local).
+ * Optional argv[2]: alternate output path (S3-C golden refresh writes to tmp
+ * so no PNG media is ever staged). Bytes are deterministic.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = path.join(root, "tests/fixtures/smoke-8x8.png");
+const out = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.join(root, "tests/fixtures/smoke-8x8.png");
 if (fs.existsSync(out) && fs.statSync(out).size > 20) {
   console.log("OK fixture exists", out);
   process.exit(0);

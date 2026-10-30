@@ -4,6 +4,17 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# S3-C #63: --seed <int> / --seed=<int> (or SEED env, default 0) → pipeline.sh
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --seed) SEED="${2:-}"; shift 2 || { echo "ERROR: --seed requires a value" >&2; exit 2; } ;;
+    --seed=*) SEED="${1#--seed=}"; shift ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+export SEED="${SEED:-0}"
 SLUG="${1:-s2a-smoke}"
 API="${API:-http://127.0.0.1:8787}"
 SMOKE_LIVE="${SMOKE_LIVE:-0}"

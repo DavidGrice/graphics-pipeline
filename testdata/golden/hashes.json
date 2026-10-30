@@ -2,15 +2,40 @@
   "billboard": {
     "algo": "sha256",
     "file": "billboard-spin.glb",
-    "sha256": "PLACEHOLDER_REFRESH_WITH_BLENDER",
-    "blenderHint": "5.2.3",
-    "note": "Regenerate via deterministic png_to_glb billboard smoke; never commit GLB bytes"
+    "sha256": "00c23ec19360861c8cf022b921cab1f0627b0b4cca57ee2946344231da8d02c2",
+    "mode": "billboard",
+    "seed": 0,
+    "blenderVersion": "5.2.3",
+    "fixture": "scripts/ensure-smoke-png.mjs (8x8 RGBA 220,40,40)",
+    "inputSha256": "250442ed57119e98d86b3768febc8e64bf372556a14fd8c4280c1acf5a965023",
+    "generatedBy": "npm run golden:refresh",
+    "stableRuns": 2,
+    "note": "sha256 of exported GLB bytes; never commit GLB bytes"
   },
   "rigged": {
     "algo": "sha256",
     "file": "rigged-smoke.glb",
-    "sha256": "PLACEHOLDER_REFRESH_WITH_BLENDER",
-    "blenderHint": "5.2.3",
-    "note": "Regenerate via deterministic png_to_glb/import_fbx rigged smoke; never commit GLB bytes"
+    "sha256": "772dde1a292f12bf9fdbcba6ee48e2e949c1fd8a004c74fa87df84c317fa9bd4",
+    "mode": "rigged",
+    "seed": 0,
+    "blenderVersion": "5.2.3",
+    "fixture": "scripts/ensure-smoke-png.mjs (8x8 RGBA 220,40,40)",
+    "inputSha256": "250442ed57119e98d86b3768febc8e64bf372556a14fd8c4280c1acf5a965023",
+    "generatedBy": "npm run golden:refresh",
+    "stableRuns": 2,
+    "note": "sha256 of exported GLB bytes; never commit GLB bytes"
+  },
+  "riggedSeed63": {
+    "algo": "sha256",
+    "file": "rigged-smoke-seed63.glb",
+    "sha256": "527ea6e07d025dfa85733e21906710331e67bf069a266fb575bccd7793690dbf",
+    "mode": "rigged",
+    "seed": 63,
+    "blenderVersion": "5.2.3",
+    "fixture": "scripts/ensure-smoke-png.mjs (8x8 RGBA 220,40,40)",
+    "inputSha256": "250442ed57119e98d86b3768febc8e64bf372556a14fd8c4280c1acf5a965023",
+    "generatedBy": "npm run golden:refresh",
+    "stableRuns": 2,
+    "note": "sha256 of exported GLB bytes; never commit GLB bytes"
   }
 }

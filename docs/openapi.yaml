@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
@@ -74,6 +74,8 @@ paths:
       description: |
         Forbidden - formats, clips, rig, stage, id, slug, clipDurations.
         importMeta is merged. assetSchemaVersion cannot decrement.
+        S3-C - scene.view {ground?, shadows?} and scene.cameras (max 16; finite
+        position/target; name 1-40; fov 10-120) validated; 17th camera or NaN -> 400.
       parameters:
         - in: path
           name: id
@@ -91,17 +93,48 @@ paths:
           description: Validation / forbidden field
         "404":
           description: Not found
-  /api/assets/{id}/clip-ux:
-    patch:
-      summary: Patch clipUx only
+    delete:
+      summary: Delete asset metadata (S3-C tip3; data files untouched)
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string }
       responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+        "409":
+          description: Still referenced by a scene
+  /api/assets/{id}/clip-ux:
+    patch:
+      summary: Patch clipUx only
+      description: |
+        S3-C #1/#2 - blendMs (0-1000, default 250 in viewer) and timeScale
+        (0.5-2.0, default 1.0). Out of range / non-finite -> 400. Never alters
+        clipDurations (probe SoT).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                defaultClip: { type: string }
+                order: { type: array, items: { type: string } }
+                disabled: { type: array, items: { type: string } }
+                blendMs: { type: number, minimum: 0, maximum: 1000 }
+                timeScale: { type: number, minimum: 0.5, maximum: 2 }
+      responses:
         "200":
           description: Updated
+        "400":
+          description: Invalid blendMs / timeScale / clipDurations write
         "404":
           description: Not found
   /api/assets/{id}/file:
@@ -135,7 +168,17 @@ paths:
           description: Missing
   /api/openapi.json:
     get:
-      summary: This OpenAPI stub (YAML body)
+      summary: This OpenAPI document as JSON (parsed from docs/openapi.yaml)
       responses:
         "200":
-          description: openapi.yaml contents
+          description: OpenAPI JSON
+          content:
+            application/json: {}
+  /api/openapi.yaml:
+    get:
+      summary: This OpenAPI document as raw YAML (docs/openapi.yaml)
+      responses:
+        "200":
+          description: OpenAPI YAML
+          content:
+            application/yaml: {}

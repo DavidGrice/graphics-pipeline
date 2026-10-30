@@ -5,8 +5,10 @@ png_to_glb.py — PNG → GLB headless pipeline (S2-C/S2-D: --mode billboard|rig
 CI / docs pin: Blender 5.2.3 LTS. Scripts tolerate bpy.app.version >= (4, 2, 0).
 
 Usage:
-  blender --background --python png_to_glb.py -- <in.png> <out.glb> [--mode billboard|rigged]
+  blender --background --python png_to_glb.py -- <in.png> <out.glb> [--mode billboard|rigged] [--seed <int>]
   # MODE / SMOKE_MODE env also accepted (default: billboard)
+  # SEED env also accepted (default: 0). S3-C #63: same seed + inputs + Blender
+  # version => byte-identical GLB (sha256). Seed 0 = canonical (no jitter).
   # or via pipeline.sh / BLENDER_BIN
 
 No EEVEE / Cycles stills — geometry + materials + GLB export only.
@@ -16,12 +18,46 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import sys
 from pathlib import Path
 
 MIN_VERSION = (4, 2, 0)
 PINNED_DOCS_VERSION = "5.2.3"  # CI / README pin (LTS)
 VALID_MODES = ("billboard", "rigged")
+SEED_MAX = 2**31 - 1
+
+# S3-C #63 — seeded keyframe-amplitude jitter. None => identity (seed 0).
+_JITTER_RNG: "random.Random | None" = None
+
+
+def _set_seed(seed: int) -> None:
+    global _JITTER_RNG
+    _JITTER_RNG = random.Random(seed) if seed != 0 else None
+
+
+def _jit(value: float) -> float:
+    """Scale a non-zero keyframe component by a seeded factor in [0.9, 1.1]."""
+    if _JITTER_RNG is None or value == 0.0:
+        return value
+    factor = 0.9 + round(_JITTER_RNG.random(), 6) * 0.2
+    return value * factor
+
+
+def _jit_vec(vec):
+    return tuple(_jit(float(c)) for c in vec)
+
+
+def _parse_seed(raw: str) -> int:
+    try:
+        seed = int(str(raw).strip(), 10)
+    except ValueError:
+        print(f"ERROR: invalid --seed {raw!r}; expected integer 0..{SEED_MAX}", file=sys.stderr)
+        raise SystemExit(2)
+    if seed < 0 or seed > SEED_MAX:
+        print(f"ERROR: --seed {seed} out of range 0..{SEED_MAX}", file=sys.stderr)
+        raise SystemExit(2)
+    return seed
 
 
 def _require_bpy():
@@ -61,8 +97,9 @@ def _argv_after_double_dash(argv: list[str]) -> list[str]:
     return argv[1:]
 
 
-def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path]:
-    """Parse --mode / MODE / SMOKE_MODE and positional in.png out.glb."""
+def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path, int]:
+    """Parse --mode / MODE / SMOKE_MODE, --seed / SEED, positional in.png out.glb."""
+    seed_raw = os.environ.get("SEED") or "0"
     mode = (
         os.environ.get("SMOKE_MODE")
         or os.environ.get("MODE")
@@ -78,6 +115,17 @@ def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path]:
             continue
         if tok.startswith("--mode="):
             mode = tok.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        if tok == "--seed":
+            if i + 1 >= len(args):
+                print("ERROR: --seed requires a value", file=sys.stderr)
+                raise SystemExit(2)
+            seed_raw = args[i + 1]
+            i += 2
+            continue
+        if tok.startswith("--seed="):
+            seed_raw = tok.split("=", 1)[1]
             i += 1
             continue
         positional.append(tok)
@@ -96,9 +144,10 @@ def _parse_mode_and_paths(args: list[str]) -> tuple[str, Path, Path]:
             file=sys.stderr,
         )
         raise SystemExit(1)
+    seed = _parse_seed(seed_raw)
     return mode, Path(positional[0]).expanduser().resolve(), Path(
         positional[1]
-    ).expanduser().resolve()
+    ).expanduser().resolve(), seed
 
 
 def _call_op_tolerant(op, **kwargs):
@@ -320,7 +369,7 @@ def _add_spin_action(bpy, obj, action_name: str = "spin") -> None:
 
     obj.rotation_euler = (0.0, 0.0, 0.0)
     obj.keyframe_insert(data_path="rotation_euler", frame=1, index=1)
-    obj.rotation_euler = (0.0, math.radians(90.0), 0.0)
+    obj.rotation_euler = (0.0, _jit(math.radians(90.0)), 0.0)
     obj.keyframe_insert(data_path="rotation_euler", frame=40, index=1)
 
 
@@ -414,11 +463,11 @@ def _build_rigged_armature(bpy, mesh_obj):
 
 def _keyframe_bone(pbone, frame: int, *, loc=None, rot=None) -> None:
     if loc is not None:
-        pbone.location = loc
+        pbone.location = _jit_vec(loc)
         pbone.keyframe_insert(data_path="location", frame=frame)
     if rot is not None:
         pbone.rotation_mode = "XYZ"
-        pbone.rotation_euler = rot
+        pbone.rotation_euler = _jit_vec(rot)
         pbone.keyframe_insert(data_path="rotation_euler", frame=frame)
 
 
@@ -574,13 +623,14 @@ def main() -> None:
         raise SystemExit(2)
 
     args = _argv_after_double_dash(sys.argv)
-    mode, in_png, out_glb = _parse_mode_and_paths(args)
+    mode, in_png, out_glb, seed = _parse_mode_and_paths(args)
+    _set_seed(seed)
 
     if not in_png.is_file():
         print(f"ERROR: input PNG not found: {in_png}", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"mode={mode}")
+    print(f"mode={mode} seed={seed}")
     _clear_scene(bpy)
     plane = _import_mesh_plane(bpy, in_png)
 
@@ -596,7 +646,7 @@ def main() -> None:
         print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)
         raise SystemExit(4)
     _export_glb(bpy, out_glb)
-    print(f"OK: wrote {out_glb} mode={mode} ({action_note})")
+    print(f"OK: wrote {out_glb} mode={mode} seed={seed} ({action_note})")
 
 
 if __name__ == "__main__":

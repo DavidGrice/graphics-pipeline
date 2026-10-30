@@ -2,6 +2,8 @@
 # Cross-platform wrapper (Git Bash / WSL / Linux / macOS).
 # Windows: set BLENDER_BIN to blender.exe, or add Blender to PATH.
 # MODE / SMOKE_MODE: billboard (default) | rigged — passed as --mode to png_to_glb.
+# SEED (S3-C #63): integer 0..2147483647, default 0 — passed as --seed.
+# Non-integer / out-of-range SEED → exit 2 (R1 HARDEN).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +11,7 @@ PNG_TO_GLB="${SCRIPT_DIR}/png_to_glb.py"
 # Docs/CI pin: Blender 5.2.3 LTS (scripts tolerate >= 4.2)
 BLENDER_BIN="${BLENDER_BIN:-blender}"
 MODE="${SMOKE_MODE:-${MODE:-billboard}}"
+SEED="${SEED:-0}"
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: BLENDER_BIN=/path/to/blender [MODE=billboard|rigged] $0 <in.png> <out.glb>" >&2
@@ -39,6 +42,11 @@ case "${MODE}" in
     ;;
 esac
 
+if [[ ! "${SEED}" =~ ^[0-9]+$ ]] || (( ${#SEED} > 10 )) || (( 10#${SEED} > 2147483647 )); then
+  echo "ERROR: SEED must be an integer 0..2147483647 (got: ${SEED})" >&2
+  exit 2
+fi
+
 mkdir -p "$(dirname "${OUT_GLB}")"
 
-exec "${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}"
+exec "${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))"

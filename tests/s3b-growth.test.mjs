@@ -127,40 +127,24 @@ test("T1.6 OpenAPI stub present", () => {
 });
 
 test("T1.4 golden hashes file tracked; mismatch fails; soft-env skip without Blender", (t) => {
+  // S3-C #62r: goldens are real Blender sha256 now; live drift assert lives in
+  // tests/s3c-golden-seed.test.mjs (pipeline.sh → GLB → sha256 vs golden).
   const goldenPath = path.join(ROOT, "testdata", "golden", "hashes.json");
   assert.ok(fs.existsSync(goldenPath), "testdata/golden/hashes.json required");
   const golden = JSON.parse(fs.readFileSync(goldenPath, "utf8"));
-  assert.ok(golden.billboard?.sha256);
-  assert.ok(golden.rigged?.sha256);
-
-  // Soft-env: no BLENDER_BIN → skip (not fake pass)
+  for (const key of ["billboard", "rigged"]) {
+    assert.match(golden[key]?.sha256 ?? "", /^[0-9a-f]{64}$/, `${key} must be real sha256`);
+  }
   if (!process.env.BLENDER_BIN) {
     t.skip("BLENDER_BIN unset — golden smoke soft-env skip (not a green lie)");
     return;
   }
-  if (!fs.existsSync(process.env.BLENDER_BIN)) {
-    t.skip("BLENDER_BIN path missing — soft-env skip");
-    return;
-  }
-  // With Blender: expect placeholders to fail until refreshed — intentional fail mode
-  // Generate demo GLB and compare; PLACEHOLDER will mismatch → fail
+  assert.ok(fs.existsSync(process.env.BLENDER_BIN), "BLENDER_BIN set but missing (fail-closed)");
+  // mismatch must fail: demo (non-Blender) GLB never equals the Blender golden
   const tmp = path.join(os.tmpdir(), "gp-golden-billboard.glb");
-  execFileSync("node", ["apps/blender-pipeline/make_demo_glb.mjs", tmp], {
-    cwd: ROOT,
-  });
+  execFileSync("node", ["apps/blender-pipeline/make_demo_glb.mjs", tmp], { cwd: ROOT });
   const actual = createHash("sha256").update(fs.readFileSync(tmp)).digest("hex");
-  const expected = golden.billboard.sha256;
-  if (expected.startsWith("PLACEHOLDER")) {
-    // Documented: must refresh goldens intentionally; CI with Blender + placeholder fails
-    assert.notEqual(actual, expected);
-    assert.ok(true, "placeholder golden correctly does not match live bytes");
-    return;
-  }
-  assert.equal(
-    actual,
-    expected,
-    `golden billboard drift: expected ${expected} got ${actual}`,
-  );
+  assert.notEqual(actual, golden.billboard.sha256, "demo GLB must not match Blender golden");
 });
 
 test("T1.2 actionMap dest must be contract clip (schema)", () => {

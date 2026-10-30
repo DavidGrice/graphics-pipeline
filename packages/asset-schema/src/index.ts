@@ -45,15 +45,39 @@ export const AssetRigSchema = z.object({
   hasWeights: z.boolean(),
   /** Unique joint-name count from GLB skins (S3-A #13) — not duplicate skin refs. */
   boneCount: z.number().int().nonnegative().optional(),
+  /** Distinct armature (skin root) count from GLB probe (S3-C #19) — must be ≤ 1. */
+  armatureCount: z.number().int().nonnegative().optional(),
   blenderVersionTested: z.string().optional(),
 });
 
 /** Viewer clip authoring prefs (S2-D) — durable on asset JSON. */
+/** S3-C #1 / #2 — viewer playback prefs (D1 §2–§3). */
+export const CLIP_BLEND_MS_MIN = 0;
+export const CLIP_BLEND_MS_MAX = 1000;
+export const CLIP_BLEND_MS_DEFAULT = 250;
+export const CLIP_TIMESCALE_MIN = 0.5;
+export const CLIP_TIMESCALE_MAX = 2;
+export const CLIP_TIMESCALE_DEFAULT = 1;
+
 export const ClipUxSchema = z
   .object({
     defaultClip: z.string().optional(),
     order: z.array(z.string()).optional(),
     disabled: z.array(z.string()).optional(),
+    /** S3-C #1 crossfade ms, 0 = hard cut. */
+    blendMs: z
+      .number()
+      .finite()
+      .min(CLIP_BLEND_MS_MIN, "clipUx.blendMs must be 0–1000")
+      .max(CLIP_BLEND_MS_MAX, "clipUx.blendMs must be 0–1000")
+      .optional(),
+    /** S3-C #2 mixer timeScale; never alters clipDurations. */
+    timeScale: z
+      .number()
+      .finite()
+      .min(CLIP_TIMESCALE_MIN, "clipUx.timeScale must be 0.5–2.0")
+      .max(CLIP_TIMESCALE_MAX, "clipUx.timeScale must be 0.5–2.0")
+      .optional(),
   })
   .optional();
 
@@ -175,13 +199,54 @@ export const SceneNodeSchema = z.object({
   visible: z.boolean().optional(),
 });
 
+/** S3-C #31 — scene-level view prefs (default ground on, shadows off). */
+export const SceneViewSchema = z
+  .object({
+    ground: z.boolean().optional(),
+    shadows: z.boolean().optional(),
+  })
+  .strict();
+
+/** S3-C #32 — orbit bookmark cameras. */
+export const SCENE_CAMERAS_MAX = 16;
+const FiniteVec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
+export const SceneCameraSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().trim().min(1, "camera name 1–40 chars").max(40, "camera name 1–40 chars"),
+    position: FiniteVec3,
+    target: FiniteVec3,
+    fov: z.number().finite().min(10, "camera fov 10–120").max(120, "camera fov 10–120").optional(),
+  })
+  .strict();
+
 export const SceneGraphSchema = z
   .object({
     version: z.literal(1).default(1),
     nodes: z.array(SceneNodeSchema).min(1),
     rootId: z.string().optional(),
+    view: SceneViewSchema.optional(),
+    cameras: z
+      .array(SceneCameraSchema)
+      .max(SCENE_CAMERAS_MAX, `SCENE_CAMERAS_MAX: at most ${SCENE_CAMERAS_MAX} cameras per scene`)
+      .optional(),
   })
   .superRefine((scene, ctx) => {
+    if (scene.cameras) {
+      const camIds = new Set<string>();
+      const camNames = new Set<string>();
+      scene.cameras.forEach((c, i) => {
+        if (camIds.has(c.id)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cameras", i, "id"], message: `duplicate camera id "${c.id}"` });
+        }
+        camIds.add(c.id);
+        const key = c.name.trim().toLowerCase();
+        if (camNames.has(key)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cameras", i, "name"], message: `duplicate camera name "${c.name}"` });
+        }
+        camNames.add(key);
+      });
+    }
     const ids = scene.nodes.map((n) => n.id);
     const seen = new Set<string>();
     for (const id of ids) {
@@ -497,6 +562,28 @@ export const AssetSchema = z
       }
     }
 
+    // --- S3-C #19: one armature per GLB (armatureCount must be 1 when hasArmature) ---
+    const ac = asset.rig.armatureCount;
+    if (ac !== undefined && ac > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rig", "armatureCount"],
+        message: `MULTI_ARMATURE: one armature per GLB (got ${ac})`,
+      });
+    } else if (ac !== undefined && asset.rig.hasArmature && ac !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rig", "armatureCount"],
+        message: `ARMATURE_COUNT: rig.armatureCount must be 1 when hasArmature (got ${ac})`,
+      });
+    } else if (ac !== undefined && !asset.rig.hasArmature && ac !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rig", "armatureCount"],
+        message: `ARMATURE_COUNT: rig.armatureCount must be 0 when hasArmature is false (got ${ac})`,
+      });
+    }
+
   });
 
 export type AssetSlug = z.infer<typeof AssetSlugSchema>;
@@ -505,6 +592,8 @@ export type AssetStage = z.infer<typeof AssetStageSchema>;
 export type AssetFormats = z.infer<typeof AssetFormatsSchema>;
 export type AssetRig = z.infer<typeof AssetRigSchema>;
 export type ClipUx = z.infer<typeof ClipUxSchema>;
+export type SceneView = z.infer<typeof SceneViewSchema>;
+export type SceneCamera = z.infer<typeof SceneCameraSchema>;
 export type ClipTags = z.infer<typeof ClipTagsSchema>;
 export type ClipDurations = z.infer<typeof ClipDurationsSchema>;
 export type ImportMeta = z.infer<typeof ImportMetaSchema>;
