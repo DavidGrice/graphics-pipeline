@@ -31,6 +31,16 @@ export function parseRateLimitPerMin(raw) {
   return Number(t);
 }
 
+/** S3-E #38 — SCENE_MAX_NODES (live-node cap), integer ≥ 1, default 256. */
+export function parseSceneMaxNodes(raw, fallback = 256) {
+  if (raw == null || String(raw).trim() === "") return fallback;
+  const t = String(raw).trim();
+  if (!/^[0-9]+$/.test(t) || !Number.isSafeInteger(Number(t)) || Number(t) < 1) {
+    throw new ConfigError("SCENE_MAX_NODES", "must be an integer >= 1");
+  }
+  return Number(t);
+}
+
 export function parseTrustProxy(raw) {
   if (raw == null || String(raw).trim() === "" || String(raw).trim() === "0") return false;
   if (String(raw).trim() === "1") return true;
