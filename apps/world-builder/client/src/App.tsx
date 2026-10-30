@@ -1475,7 +1475,7 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 3-C</p>
+        <p className="muted">localhost · Sprint 3-D</p>
         <input
           ref={searchInputRef}
           className="search"

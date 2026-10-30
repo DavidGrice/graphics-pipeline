@@ -1,13 +1,15 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
     S3-D (R1 rev2 §0): every 4xx/5xx JSON body is `Error` — flat `{ code, error, ...extra }`.
     Bodies never carry absolute filesystem paths (repo-relative `rel` only).
     MAX_GLB_MB (env, default 100, integer >= 1; invalid -> server refuses to start).
+    S3-D 0.5.0: every error code, HTTP status and CLI exit is listed in docs/error-codes.md
+    (#152; kept in sync both ways by tests/s3d-error-codes.test.mjs).
 servers:
   - url: http://127.0.0.1:8787
     description: Local world-builder

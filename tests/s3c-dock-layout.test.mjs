@@ -65,14 +65,16 @@ test("tip3 #82 static: dock markup order Author → Blend/Speed → View(Overlay
   const sv = APP.slice(order[4], order[5]);
   assert.match(sv, />\s*Ground\s*</);
   assert.match(sv, />\s*Shadows\s*</);
-  assert.match(APP, /localhost · Sprint 3-C/);
+  // S3-D E3: header bumped to Sprint 3-D (was 3-C); older sprint labels must be gone
+  assert.match(APP, /localhost · Sprint 3-D/);
+  assert.doesNotMatch(APP, /Sprint 3-C</);
   assert.doesNotMatch(APP, /Sprint 3-B</);
 });
 
 test("tip3 #82 browser: Wireframe/Bones topmost + clickable at 1280x800 and 1920x1080; rows don't intersect", async (t) => {
   const UI = process.env.UI_URL;
   if (!UI) {
-    t.skip("UI_URL unset — browser layout check skipped (set UI_URL=http://localhost:5173 with vite + API up)");
+    t.skip("SKIP_NO_UI_URL: UI_URL unset — browser layout check skipped (set UI_URL=http://localhost:5173 with vite + API up)");
     return;
   }
   let chromium;
@@ -80,19 +82,19 @@ test("tip3 #82 browser: Wireframe/Bones topmost + clickable at 1280x800 and 1920
     const req = createRequire(path.join(process.env.PLAYWRIGHT_CORE_DIR || ROOT, "/"));
     ({ chromium } = req("playwright-core"));
   } catch {
-    t.skip("playwright-core not resolvable — set PLAYWRIGHT_CORE_DIR (dir containing node_modules/playwright-core)");
+    t.skip("SKIP_PLATFORM: playwright-core not resolvable — set PLAYWRIGHT_CORE_DIR (dir containing node_modules/playwright-core)");
     return;
   }
   const exe = process.env.CHROME_BIN || "/usr/bin/google-chrome";
   if (!fs.existsSync(exe)) {
-    t.skip(`Chrome not found at ${exe} — set CHROME_BIN`);
+    t.skip(`SKIP_PLATFORM: Chrome not found at ${exe} — set CHROME_BIN`);
     return;
   }
   const API = process.env.WORLD_API || "http://127.0.0.1:8787";
   const list = await (await fetch(`${API}/api/assets`)).json();
   const rig = list.find((a) => a.stage === "rigged" && (a.clips || []).length > 1);
   if (!rig) {
-    t.skip(`no rigged asset with clips on ${API}`);
+    t.skip(`SKIP_NO_API: no rigged asset with clips on ${API}`);
     return;
   }
   const b = await chromium.launch({ executablePath: exe, args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"] });
