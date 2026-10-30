@@ -1,5 +1,5 @@
 # S3-E · D1: scene-author node cap, soft-delete, replace child, touch orbit
-Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/sprint3e-seed.md` · cut-draft, rebinds to R1 `/workspace/sprint3e-brief.md` · `assetSchemaVersion` stays **3**. Every field is additive and optional, and every error body is `{code, error, ...extra}`.
+Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/sprint3e-seed.md` · **bound to R1** `docs/sprint3e-brief.md` · `assetSchemaVersion` stays **3**. Every field is additive and optional, and every error body is `{code, error, ...extra}`.
 
 ## 1. #38 Node cap
 - `SCENE_MAX_NODES` defaults to 256 and must be an integer of at least 1. An invalid value refuses start, so it fails closed.
@@ -22,12 +22,17 @@ Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/s
   - It confirms inline with the text "Permanently remove n nodes? This can't be undone." and **Purge** / **Cancel** buttons. There's no modal.
   - Purge removes the tombstones from the draft. They're only gone from storage after Save, under the S3-A dirty rules.
   - Save on its own **never** purges.
+- **R1 invariants, shown in the UI:**
+  - Delete is disabled on the `rootId` node, with the `title` "Root node can't be deleted". The API returns 400 `SCENE_ROOT_DELETE`.
+  - Delete is disabled when it would leave no live nodes. The API returns 400 `SCENE_NO_LIVE_NODES`.
+  - Tombstoned nodes can't be selected by a gizmo, can't be duplicated and can't be replaced.
+- **Asset delete:** a tombstoned reference still blocks `DELETE /api/assets/:id`, with 409 `ASSET_IN_USE`. The asset panel's hint for that case reads "Used by deleted nodes in <scene>, purge to free".
 - Hooks: `node-restore-<id>`, `nodes-purge`, `nodes-purge-confirm`, `nodes-show-deleted`.
 
 ## 3. #35 Replace child asset and keep its transform
 - The node inspector gets a **Replace asset…** action. It opens the existing asset search (S3-A tags and search chrome) in picker mode, and the current asset is excluded from the results.
 - Picking an asset swaps `assetId` only. `transform`, `visible` and the node id are kept, and `defaultClip` resets to the new asset's default.
-- The swap marks the scene dirty and runs V4/V4a resolve on the draft. A missing or ambiguous target shows the existing V4 or V4a inline error on that node row, and Save stays disabled until it's fixed.
+- The swap marks the scene dirty and runs V4/V4a resolve on the draft. A missing or ambiguous target shows the existing V4 or V4a inline error on that node row. Picking a `stage:"scene"` asset is also rejected, with the existing no-nested error, and so is picking the scene itself, and Save stays disabled until it's fixed.
 - One undo step: until Save, an inline "Replaced X → Y · Undo" chip lets you undo the swap.
 - Hooks: `node-replace-<id>`, `node-replace-undo`.
 
