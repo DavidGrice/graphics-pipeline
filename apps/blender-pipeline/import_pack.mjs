@@ -10,10 +10,12 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { unzipStore } from "./zip_store.mjs";
-import { probeGlb } from "./probe_glb.mjs";
+import { cachedProbe } from "./probe_cache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
+// S3-E: WB_DATA_ROOT mirrors register_asset.mjs / the API (hermetic tests); default repo data/.
+const DATA_DIR = process.env.WB_DATA_ROOT ? path.resolve(process.env.WB_DATA_ROOT) : path.join(REPO, "data");
 
 function arg(name, fallback) {
   const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -89,10 +91,13 @@ for (const meta of pack.assets || []) {
     }
     const dest = path.join(outdir, path.basename(glbRel));
     fs.writeFileSync(dest, file.data);
-    probed = probeGlb(dest);
+    // S3-E #134 — pack import shares the content-addressed probe cache.
+    const pc = cachedProbe(dest, { dataRoot: DATA_DIR });
+    probed = pc.probed;
+    console.log(`probeCache: ${pc.probeCache} ${meta.slug}`);
     // Copy into data/assets for register if API up — use gitignored path
     const id = meta.id && force && hit ? hit.id : randomUUID();
-    const assetDir = path.join(REPO, "data", "assets", id);
+    const assetDir = path.join(DATA_DIR, "assets", id);
     fs.mkdirSync(assetDir, { recursive: true });
     const glbDest = path.join(assetDir, "model.glb");
     fs.copyFileSync(dest, glbDest);
