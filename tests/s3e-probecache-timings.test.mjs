@@ -147,14 +147,13 @@ test("#134 cache lives under DATA_ROOT/cache/probe (resolveUnder) and is gitigno
 const KEYS = ["stages", "totalMs", "probeCache"];
 const STAGES = ["export", "probe", "copy", "register"];
 
-test("#66 register writes timings.json beside the asset: fixed keys, integer ms, total = sum", () => {
+test("#66 register writes timings.json beside the asset: R1 keys, integer ms, total = sum, no export without a match", () => {
   const glb = glbFile("t.glb", { bones: 3, clips: { idle: 9, walk: 9, run: 9 } });
   const r = register(glb);
   assert.equal(r.r.status, 0, r.r.stderr);
   const t = JSON.parse(fs.readFileSync(path.join(api.dataRoot, "assets", r.id, "timings.json"), "utf8"));
   assert.deepEqual(Object.keys(t), KEYS);
-  assert.deepEqual(Object.keys(t.stages), STAGES);
-  assert.equal(t.stages.export, null, "no pipeline export beside this GLB");
+  assert.deepEqual(Object.keys(t.stages), ["probe", "copy", "register"], "export omitted (no matching sidecar)");
   for (const k of ["probe", "copy", "register"]) assert.ok(Number.isInteger(t.stages[k]) && t.stages[k] >= 0, k);
   assert.equal(t.totalMs, t.stages.probe + t.stages.copy + t.stages.register);
   assert.equal(t.probeCache, "miss");
@@ -162,18 +161,22 @@ test("#66 register writes timings.json beside the asset: fixed keys, integer ms,
   assert.equal(r.body.importMeta, undefined, "#97 control: no importMeta created just for timings");
 });
 
-test("#66 export stage comes from a fresh pipeline timings.json; stale one is ignored; importMeta mirror", () => {
+const sidecar = (glb, over = {}) =>
+  JSON.stringify({ glb: path.basename(glb), sha256: sha(glb), stages: { export: 1234 }, ...over });
+
+test("#66 export ms only from a <name>.timings.json whose glb name AND sha256 match; importMeta mirror", () => {
   const sub = fs.mkdtempSync(path.join(dir, "exp-"));
   const glb = path.join(sub, "model.glb");
   fs.writeFileSync(glb, makeRiggedGlb({ bones: 4, clips: { idle: 7, walk: 7, run: 7 } }));
-  const tj = path.join(sub, "timings.json");
-  fs.writeFileSync(tj, JSON.stringify(buildTimings({ export: 1234 })));
+  const tj = path.join(sub, "model.timings.json");
+  fs.writeFileSync(tj, sidecar(glb));
   assert.equal(readExportMs(glb), 1234);
   const meta = path.join(sub, "meta.json");
   fs.writeFileSync(meta, JSON.stringify({ source: "png_pipeline" }));
   const r = register(glb, ["--import-meta", meta]);
   assert.equal(r.r.status, 0, r.r.stderr);
   const t = JSON.parse(fs.readFileSync(path.join(api.dataRoot, "assets", r.id, "timings.json"), "utf8"));
+  assert.deepEqual(Object.keys(t.stages), STAGES);
   assert.equal(t.stages.export, 1234);
   assert.equal(t.totalMs, 1234 + t.stages.probe + t.stages.copy + t.stages.register);
   const m = r.body.importMeta.timingsMs;
@@ -181,30 +184,77 @@ test("#66 export stage comes from a fresh pipeline timings.json; stale one is ig
   assert.equal(m.probeCache, "miss");
   assert.equal(m.export, 1234);
   assert.equal(m.total, m.export + m.probe + m.copy);
-  // stale: timings.json older than the GLB → ignored
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(tj, old, old);
-  assert.equal(readExportMs(glb), null);
+  // mismatches → no export time
+  fs.writeFileSync(tj, sidecar(glb, { sha256: "0".repeat(64) }));
+  assert.equal(readExportMs(glb), null, "sha mismatch");
+  fs.writeFileSync(tj, sidecar(glb, { glb: "other.glb" }));
+  assert.equal(readExportMs(glb), null, "name mismatch");
+  fs.writeFileSync(tj, sidecar(glb, { stages: { export: 1.5 } }));
+  assert.equal(readExportMs(glb), null, "non-integer");
   fs.writeFileSync(tj, "{garbage");
   assert.equal(readExportMs(glb), null, "malformed → ignored");
+  // a legacy shared timings.json in the folder is never read
+  fs.rmSync(tj);
+  fs.writeFileSync(path.join(sub, "timings.json"), JSON.stringify(buildTimings({ export: 999 })));
+  assert.equal(readExportMs(glb), null);
 });
 
-test("#66 pipeline.sh writes the export-only timings.json beside its GLB (stub Blender)", () => {
-  const sub = fs.mkdtempSync(path.join(dir, "pipe-"));
+test("#66 NIT-E1-1: two GLBs in one folder never share an export time (pipeline.sh sidecars)", () => {
+  const sub = fs.mkdtempSync(path.join(dir, "two-"));
   const stub = path.join(sub, "blender-stub.sh");
-  fs.writeFileSync(stub, '#!/usr/bin/env bash\nwhile [[ "$1" != "--" ]]; do shift; done; shift\nprintf x > "$2"\n', { mode: 0o755 });
+  // stub "Blender" writes a rigged GLB whose bytes depend on the output name
+  const gen = path.join(sub, "gen.mjs");
+  fs.writeFileSync(
+    gen,
+    `import fs from "node:fs";\nimport { makeRiggedGlb } from ${JSON.stringify(path.join(ROOT, "tests/helpers/s3d-synth.mjs"))};\n` +
+      `const out = process.argv[2];\nfs.writeFileSync(out, makeRiggedGlb({ bones: out.endsWith("b.glb") ? 5 : 3 }));\n`,
+  );
+  fs.writeFileSync(stub, `#!/usr/bin/env bash\nwhile [[ "$1" != "--" ]]; do shift; done; shift\n"${process.execPath}" "${gen}" "$2"\n`, { mode: 0o755 });
   const png = path.join(sub, "in.png");
   fs.writeFileSync(png, "x");
-  const out = path.join(sub, "out", "model.glb");
-  const r = spawnBash(path.join(ROOT, "apps/blender-pipeline/pipeline.sh"), [png, out], { env: { ...process.env, BLENDER_BIN: stub } });
-  assert.equal(r.status, 0, r.stderr);
-  const t = JSON.parse(fs.readFileSync(path.join(sub, "out", "timings.json"), "utf8"));
-  assert.deepEqual(Object.keys(t), KEYS);
-  assert.deepEqual(Object.keys(t.stages), STAGES);
-  assert.ok(Number.isInteger(t.stages.export) && t.stages.export >= 0);
-  assert.equal(t.totalMs, t.stages.export);
-  assert.equal(t.stages.probe, null);
-  assert.equal(readExportMs(out), t.stages.export);
+  const older = path.join(sub, "ui-rig.glb");
+  fs.writeFileSync(older, makeRiggedGlb({ bones: 6 })); // not exported by pipeline.sh
+  const a = path.join(sub, "s3e-a.glb");
+  const b = path.join(sub, "s3e-b.glb");
+  for (const out of [a, b]) {
+    const r = spawnBash(path.join(ROOT, "apps/blender-pipeline/pipeline.sh"), [png, out], { env: { ...process.env, BLENDER_BIN: stub } });
+    assert.equal(r.status, 0, r.stderr);
+  }
+  for (const g of [a, b]) {
+    const j = JSON.parse(fs.readFileSync(path.join(sub, `${path.basename(g, ".glb")}.timings.json`), "utf8"));
+    assert.deepEqual(Object.keys(j), ["glb", "sha256", "stages"]);
+    assert.deepEqual(Object.keys(j.stages), ["export"]);
+    assert.equal(j.glb, path.basename(g));
+    assert.equal(j.sha256, sha(g));
+    assert.ok(Number.isInteger(j.stages.export) && j.stages.export >= 0);
+    assert.equal(readExportMs(g), j.stages.export);
+  }
+  assert.ok(!fs.existsSync(path.join(sub, "timings.json")), "no shared per-folder file");
+  // the Tester's repro: registering the older, never-exported GLB gets NO export time
+  assert.equal(readExportMs(older), null);
+  const ro = register(older);
+  assert.equal(ro.r.status, 0, ro.r.stderr);
+  const t = JSON.parse(fs.readFileSync(path.join(api.dataRoot, "assets", ro.id, "timings.json"), "utf8"));
+  assert.ok(!("export" in t.stages), "older GLB must not inherit another GLB's export ms");
+  // re-exporting b with different bytes under a's name can't leak b's sidecar onto a
+  fs.copyFileSync(b, a);
+  assert.equal(readExportMs(a), null, "a's sidecar sha no longer matches a's bytes");
+});
+
+test("tip1.1 PROBE_CACHE strict: only 0|1; anything else → ERROR CONFIG_INVALID, exit 2, value not echoed", async () => {
+  const glb = glbFile("pc.glb", { bones: 2 });
+  for (const v of ["2", "off", "true", "sekrit"]) {
+    const r = register(glb, [], { PROBE_CACHE: v });
+    assert.equal(r.r.status, 2, `PROBE_CACHE=${v}`);
+    assert.equal(r.r.stderr.trim(), "ERROR CONFIG_INVALID: PROBE_CACHE must be 0 or 1");
+  }
+  assert.equal(register(glb, [], { PROBE_CACHE: "1" }).r.status, 0);
+  const ip = spawnSync(process.execPath, [path.join(ROOT, "apps/blender-pipeline/import_pack.mjs"), "--zip", glb], {
+    env: { ...process.env, PROBE_CACHE: "yes" },
+    encoding: "utf8",
+  });
+  assert.equal(ip.status, 2);
+  assert.match(ip.stderr, /CONFIG_INVALID: PROBE_CACHE/);
 });
 
 test("#66 schema: importMeta.timingsMs is additive + strict; assetSchemaVersion stays 3", async () => {

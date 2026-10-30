@@ -156,13 +156,28 @@ test("#139 mutating /api over the limit → 429 RATE_LIMITED {retryAfterSec} + R
   assert.equal((await fetch(`${api.url}/api/health`)).status, 200);
 });
 
-test("#139 TRUST_PROXY=1 → buckets keyed by the left-most X-Forwarded-For", async () => {
+test("#139 TRUST_PROXY=1 → bucket keyed by the RIGHT-most X-Forwarded-For (proxy-appended); spoofed left entries ignored", async () => {
   const a = await startApi({ RATE_LIMIT_PER_MIN: "1", TRUST_PROXY: "1" });
   try {
-    const del = (ip) => fetch(`${a.url}/api/assets/nope`, { method: "DELETE", headers: { "X-Forwarded-For": `${ip}, 10.0.0.1` } });
+    const del = (xff) => fetch(`${a.url}/api/assets/nope`, { method: "DELETE", headers: { "X-Forwarded-For": xff } });
     assert.equal((await del("198.51.100.1")).status, 404);
-    assert.equal((await del("198.51.100.1")).status, 429);
-    assert.equal((await del("198.51.100.2")).status, 404, "other client has its own bucket");
+    // client rotates a spoofed left-most entry; the proxy-appended right-most stays the same
+    assert.equal((await del("203.0.113.7, 198.51.100.1")).status, 429, "spoofed left-most must not open a new bucket");
+    assert.equal((await del("203.0.113.8,198.51.100.1")).status, 429);
+    assert.equal((await del("198.51.100.1, 198.51.100.2")).status, 404, "different real client (right-most) → own bucket");
+  } finally {
+    await a.stop();
+  }
+});
+
+test("#139 uppercase /API/ path cannot bypass the limiter (Express routes are case-insensitive)", async () => {
+  const a = await startApi({ RATE_LIMIT_PER_MIN: "1" });
+  try {
+    assert.equal((await fetch(`${a.url}/API/assets/nope`, { method: "DELETE" })).status, 404, "routed like /api/");
+    const r = await fetch(`${a.url}/API/Assets/nope`, { method: "DELETE" });
+    assert.equal(r.status, 429);
+    assert.equal((await r.json()).code, "RATE_LIMITED");
+    assert.equal((await fetch(`${a.url}/Api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 429);
   } finally {
     await a.stop();
   }
@@ -192,6 +207,7 @@ test("#139 token bucket math (fake clock): capacity N, refill N/60 per s, Retry-
   assert.equal(over.res.body.retryAfterSec, 1);
   assert.ok(run("GET").passed && run("HEAD").passed && run("OPTIONS").passed, "safe methods exempt");
   assert.ok(run("POST", "/data/x").passed, "only /api/ is limited");
+  assert.equal(run("POST", "/API/assets").passed, false, "case-insensitive /api/");
   t += 1000; // one token back
   assert.ok(run("DELETE", "/api/assets/x").passed);
   assert.equal(run().passed, false);
