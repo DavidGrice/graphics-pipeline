@@ -14,7 +14,7 @@ Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/s
 - **Delete** on a node sets `deleted: true`. The node keeps its id and its transform.
 - The viewer doesn't render it, and resolve (V4/V4a) skips it.
 - **In the author's node list:**
-  - Tombstoned rows stay in place and are shown struck through, at 50% opacity, with a "deleted" pill.
+  - Tombstoned rows stay in place and are shown struck through in the muted text colour (not opacity, so AA contrast holds), with a "deleted" pill.
   - Each tombstoned row has a **Restore** button that clears the flag, unless the cap would be exceeded.
   - The list header has a toggle, "Show deleted (n)", which is on by default whenever n > 0.
 - **Purge:**
@@ -27,6 +27,9 @@ Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/s
   - Delete is disabled when it would leave no live nodes. The API returns 400 `SCENE_NO_LIVE_NODES`.
   - Tombstoned nodes can't be selected by a gizmo, can't be duplicated and can't be replaced.
 - **Asset delete:** a tombstoned reference still blocks `DELETE /api/assets/:id`, with 409 `ASSET_IN_USE`. The asset panel's hint for that case reads "Used by deleted nodes in <scene>, purge to free".
+- **Delete asset… (tip3):** the asset panel has a "Delete asset…" button with an inline confirm. A 409 `ASSET_IN_USE` there shows the purge hint.
+- `SCENE_ROOT_DELETE` checks the explicit `rootId` only.
+- The UI reads the cap from `/api/health` → `limits.sceneMaxNodes`.
 - Hooks: `node-restore-<id>`, `nodes-purge`, `nodes-purge-confirm`, `nodes-show-deleted`.
 
 ## 3. #35 Replace child asset and keep its transform
@@ -46,6 +49,10 @@ Base `132f0dc` · pack `enhancement/s3e-growth-t5` · seed and cut `/workspace/s
   - Touch targets are at least 44×44 px below 600 px width, and stay at least 24 px at desktop sizes.
   - Nothing overlaps.
 - AC viewport: headless 390×844 with touch emulation, plus the existing 1280×800 and 1920 checks.
+
+## 5. Narrow viewports (below 600 px)
+- The overlay panels (import/actionMap) move into flow **below** the canvas so they never cover it or catch touch.
+- The canvas `touch-action: none` is `!important`, because three.js writes an inline `auto` when the controls remount.
 
 ## Layout guard
 - Everything new follows `/workspace/s3c-82-dock-layout.md`: in-flow layout, wrapping rows, and no overlap at 390×844, 1280×800 or 1920. AA contrast (4.5:1) holds in both #86 themes, including the struck-through tombstone rows.
