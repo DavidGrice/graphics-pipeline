@@ -27,7 +27,7 @@ import {
 } from "../apps/blender-pipeline/golden.mjs";
 
 const SKIP_REASON =
-  "BLENDER_BIN unset — Blender-gated golden/seed check skipped (set BLENDER_BIN=/home/box/tools/blender to run; not a green lie)";
+  "SKIP_NO_BLENDER: BLENDER_BIN unset — Blender-gated golden/seed check skipped (set BLENDER_BIN=/home/box/tools/blender to run; not a green lie)";
 
 /** null → skip; throws when BLENDER_BIN set but missing (fail-closed). */
 function blenderOrSkip(t) {

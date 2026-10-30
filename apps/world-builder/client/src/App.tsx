@@ -7,6 +7,30 @@ import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/dr
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
+import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
+import { preflightGlb, probeDump, type PreflightResult } from "./s3dErrors";
+import {
+  ALT_TEXT_MAX,
+  CANVAS_THEME,
+  MOTION_PREFS,
+  RECENT_IMPORTS_LIMIT,
+  THEME_PREFS,
+  altTextState,
+  ambiguousSlugOf,
+  applySuggestedSlug,
+  canvasAriaLabel,
+  effectiveBlendMs,
+  parseSlugClash,
+  recentImports,
+  relativeTime,
+  resolveReducedMotion,
+  resolveTheme,
+  shouldAutoplay,
+  warningsCount,
+  type MotionPref,
+  type SlugClash,
+  type ThemePref,
+} from "./s3dPrefs";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -63,6 +87,8 @@ type ImportMetaView = {
   boneMapStub?: string;
   characterTypeHint?: string;
   humanoidPngApproved?: boolean;
+  /** S3-D #49/#97 warn-only import warnings */
+  warnings?: Array<{ code: string; message?: string }>;
 };
 
 type AssetMeta = {
@@ -80,6 +106,10 @@ type AssetMeta = {
   clipTags?: Record<string, Array<"locomotion" | "emote" | "combat">>;
   clipDurations?: Record<string, number>;
   license?: string;
+  /** S3-D #88 */
+  altText?: string;
+  /** S3-D #94 */
+  createdAt?: string;
   assetSchemaVersion?: number;
   scene?: {
     version?: number;
@@ -591,6 +621,20 @@ function SceneNodeMissing({
   );
 }
 
+/** S3-D #86/#90 — matchMedia helpers (SSR/test-safe). */
+function mediaMatches(query: string, fallback: boolean): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return fallback;
+  return window.matchMedia(query).matches;
+}
+function watchMedia(query: string, set: (v: boolean) => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const mq = window.matchMedia(query);
+  const on = (e: MediaQueryListEvent) => set(e.matches);
+  mq.addEventListener("change", on);
+  set(mq.matches);
+  return () => mq.removeEventListener("change", on);
+}
+
 function LoadError({ message }: { message: string }) {
   return (
     <mesh>
@@ -678,6 +722,11 @@ function normalizeSceneSnapshot(
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
+  // S3-D #89 — bump to re-mount the viewer boundary (Retry) after clearing the GLTF cache.
+  const [viewerRetry, setViewerRetry] = useState(0);
+  /** url → GLB preflight (missing/non-GLB never reaches useGLTF → no uncaught throw). */
+  const [preflight, setPreflight] = useState<Record<string, PreflightResult>>({});
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [clip, setClip] = useState("");
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
@@ -690,6 +739,24 @@ export function App() {
   const [gltfClips, setGltfClips] = useState<string[]>([]);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [regJson, setRegJson] = useState("");
+  // S3-D #127 — inline slug-clash state for the register form
+  const [regClash, setRegClash] = useState<SlugClash | null>(null);
+  // S3-D #94 — Recent imports (newest 20 by createdAt)
+  const [recent, setRecent] = useState<AssetMeta[]>([]);
+  // S3-D #88 — alt text draft for the selected asset
+  const [altDraft, setAltDraft] = useState("");
+  const [altSaving, setAltSaving] = useState(false);
+  const [altError, setAltError] = useState<string | null>(null);
+  // S3-D #86/#90 — session-only overrides (not persisted, no schema)
+  const [themePref, setThemePref] = useState<ThemePref>("system");
+  const [motionPref, setMotionPref] = useState<MotionPref>("system");
+  const [sysDark, setSysDark] = useState(() => mediaMatches("(prefers-color-scheme: dark)", true));
+  const [sysReduce, setSysReduce] = useState(() =>
+    mediaMatches("(prefers-reduced-motion: reduce)", false),
+  );
+  const theme = resolveTheme(themePref, sysDark);
+  const reducedMotion = resolveReducedMotion(motionPref, sysReduce);
+  const canvasTheme = CANVAS_THEME[theme];
   const [clipUx, setClipUx] = useState<ClipUx>({});
   const [sceneNodeId, setSceneNodeId] = useState<string | null>(null);
   const [sceneDraft, setSceneDraft] = useState<SceneNodeDraft[]>([]);
@@ -728,8 +795,33 @@ export function App() {
   const controlsRef = useRef<any>(null);
   const clipUxTimer = useRef<number | null>(null);
 
-  const refresh = () =>
-    fetch(`${API}/api/assets`)
+  // S3-D #94 — server-sorted history; falls back to client sort if the API predates sort/limit.
+  const refreshRecent = () =>
+    fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`)
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data)) setRecent(recentImports(data as AssetMeta[]));
+      })
+      .catch(() => {
+        /* panel is advisory; the main list reports API errors */
+      });
+
+  // S3-D #86/#90 — follow the OS settings live; the session selects override them.
+  useEffect(() => {
+    const unsubs = [
+      watchMedia("(prefers-color-scheme: dark)", setSysDark),
+      watchMedia("(prefers-reduced-motion: reduce)", setSysReduce),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.motion = reducedMotion ? "reduced" : "on";
+  }, [theme, reducedMotion]);
+
+  const refresh = () => {
+    void refreshRecent();
+    return fetch(`${API}/api/assets`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`GET /api/assets ${r.status}`);
         return r.json();
@@ -746,10 +838,47 @@ export function App() {
         setError(null);
       })
       .catch((err) => setError(String(err)));
+  };
 
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    setAltDraft(selected?.altText ?? "");
+    setAltError(null);
+  }, [selected?.id, selected?.altText]);
+
+  async function saveAltText() {
+    if (!selected) return;
+    const st = altTextState(altDraft);
+    if (st.over) return;
+    setAltSaving(true);
+    setAltError(null);
+    try {
+      const r = await fetch(`${API}/api/assets/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ altText: st.trimmed }),
+      });
+      const text = await r.text();
+      if (!r.ok) {
+        let msg = `${r.status}`;
+        try {
+          const j = JSON.parse(text);
+          msg = `${j.code ?? r.status}: ${j.error ?? ""}`;
+        } catch {
+          /* keep status */
+        }
+        throw new Error(msg);
+      }
+      await refresh();
+    } catch (err) {
+      setAltError(`Alt text not saved — ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAltSaving(false);
+    }
+  }
 
   const probedClips = useMemo(() => {
     if (selected?.clips && selected.clips.length > 0) return selected.clips;
@@ -819,7 +948,8 @@ export function App() {
   useEffect(() => {
     const next = pickDefaultClip(clipsForUi, clipUx);
     setClip(next);
-    setPlaying(next.length > 0);
+    // S3-D #90 — no autoplay when motion is reduced (the user presses Play)
+    setPlaying(shouldAutoplay(next.length > 0, reducedMotion));
     setScrub(0);
   }, [selected?.id, clipsForUi.join("|"), clipUx.defaultClip]);
 
@@ -988,6 +1118,8 @@ export function App() {
     setCameraSel(res.cameras[res.cameras.length - 1].id);
     setCameraErr(null);
   };
+  // S3-D #90 — bookmark jumps are always instant (set + update, no tween), so reduced motion
+  // needs no special case here; OrbitControls damping is disabled when reduced.
   const jumpToCamera = (id: string) => {
     setCameraSel(id);
     const c = camerasDraft.find((x) => x.id === id);
@@ -1175,6 +1307,33 @@ export function App() {
   const canPlay = clipsForUi.length > 0 && !isScene;
   const glbUrl =
     selected && !isScene ? `${API}/api/assets/${selected.id}/file` : null;
+  // S3-D #89 — preflight every GLB the viewer is about to load (single asset or scene children).
+  const viewerGlbUrls = useMemo(() => {
+    if (!selected) return [] as string[];
+    if (!isScene) return glbUrl ? [glbUrl] : [];
+    const out: string[] = [];
+    for (const n of sceneNodes) {
+      const c = resolveChild(n.assetId);
+      if (c?.formats?.glb) out.push(`${API}/api/assets/${c.id}/file`);
+    }
+    return [...new Set(out)];
+  }, [selected, isScene, glbUrl, sceneNodes, resolveChild]);
+  const viewerGlbKey = viewerGlbUrls.join("|");
+  useEffect(() => {
+    let alive = true;
+    for (const u of viewerGlbUrls) {
+      if (preflight[u]) continue;
+      preflightGlb(u).then((r) => {
+        if (alive) setPreflight((prev) => (prev[u] ? prev : { ...prev, [u]: r }));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerGlbKey, viewerRetry]);
+  const singlePreflight = glbUrl ? preflight[glbUrl] : undefined;
+
   const formatLabel = selected?.formats?.glb
     ? "glb"
     : selected?.formats?.obj
@@ -1199,7 +1358,14 @@ export function App() {
         body: JSON.stringify(body),
       });
       const text = await r.text();
+      // S3-D #127 — keep the form and its values; show the inline clash + suggestion
+      const clash = parseSlugClash(r.status, text);
+      if (clash) {
+        setRegClash(clash);
+        return;
+      }
       if (!r.ok) throw new Error(`${r.status} ${text}`);
+      setRegClash(null);
       setRegisterOpen(false);
       await refresh();
     } catch (err) {
@@ -1309,8 +1475,9 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
-        <p className="muted">localhost · Sprint 3-C</p>
+        <p className="muted">localhost · Sprint 3-D</p>
         <input
+          ref={searchInputRef}
           className="search"
           placeholder="Search…"
           value={search}
@@ -1351,6 +1518,46 @@ export function App() {
             </li>
           ))}
         </ul>
+        <details className="recent-imports" open data-testid="recent-imports">
+          <summary>Recent imports</summary>
+          {recent.length === 0 ? (
+            <p className="muted">No imports yet.</p>
+          ) : (
+            <ol aria-label="Recent imports">
+              {recent.map((a) => {
+                const b = characterTypeBadge(a);
+                const n = warningsCount(a);
+                return (
+                  <li key={a.id}>
+                    <button
+                      type="button"
+                      className="recent-row"
+                      data-testid="recent-import-row"
+                      onClick={() => {
+                        const live = assets.find((x) => x.id === a.id) ?? a;
+                        setSelected(live);
+                        setLoadError(null);
+                        setGltfClips([]);
+                      }}
+                    >
+                      <span>{a.name || a.slug}</span>
+                      <span className="muted">· {a.stage ?? "—"}</span>
+                      <span className={`badge ctype ctype-${b.tone}`}>{b.label}</span>
+                      {n > 0 ? (
+                        <span className="recent-warn" title={`${n} import warning(s)`}>
+                          ⚠ {n}
+                        </span>
+                      ) : null}
+                      <span className="muted recent-time" title={a.createdAt ?? "no createdAt (legacy)"}>
+                        {relativeTime(a.createdAt)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </details>
         <button type="button" className="primary" onClick={() => setRegisterOpen((o) => !o)}>
           Register asset
         </button>
@@ -1360,8 +1567,27 @@ export function App() {
               rows={10}
               placeholder='Paste Asset JSON (id, slug, clips, formats…)'
               value={regJson}
+              aria-label="Asset JSON"
               onChange={(e) => setRegJson(e.target.value)}
             />
+            {regClash && (
+              <div className="slug-clash" role="alert" data-testid="slug-clash">
+                <span>
+                  <code>{regClash.slug}</code> is already used by <code>{regClash.existingId}</code>
+                </span>
+                <button
+                  type="button"
+                  className="tiny primary"
+                  data-testid="slug-clash-suggest"
+                  onClick={() => {
+                    setRegJson((j) => applySuggestedSlug(j, regClash.suggestedSlug));
+                    setRegClash(null);
+                  }}
+                >
+                  Use {regClash.suggestedSlug}
+                </button>
+              </div>
+            )}
             <button type="button" onClick={submitRegister}>
               POST /api/assets
             </button>
@@ -1459,8 +1685,78 @@ export function App() {
             </div>
           </div>
         )}
-        <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }} shadows={viewDraft.shadows}>
-          <color attach="background" args={["#12151c"]} />
+        <ErrorBoundary
+          scope="viewer"
+          assetId={selected?.id ?? null}
+          url={glbUrl}
+          probe={probeDump(selected as Parameters<typeof probeDump>[0])}
+          resetKey={`${selected?.id ?? ""}:${viewerRetry}`}
+          onRetry={() => {
+            const urls = isScene
+              ? sceneNodes
+                  .map((n) => resolveChild(n.assetId))
+                  .filter((c): c is AssetMeta => Boolean(c))
+                  .map((c) => `${API}/api/assets/${c.id}/file`)
+              : glbUrl
+                ? [glbUrl]
+                : [];
+            for (const u of urls) useGLTF.clear(u);
+            setPreflight((prev) => {
+              const next = { ...prev };
+              for (const u of urls) delete next[u];
+              return next;
+            });
+            setLoadError(null);
+            setViewerRetry((n) => n + 1);
+          }}
+          onBack={() => {
+            setSelected(null);
+            setLoadError(null);
+            setGltfClips([]);
+            searchInputRef.current?.focus();
+          }}
+        >
+        {singlePreflight && !singlePreflight.ok ? (
+          <ErrorCard
+            scope="viewer"
+            info={singlePreflight.info}
+            assetId={selected?.id ?? null}
+            url={glbUrl}
+            probe={probeDump(selected as Parameters<typeof probeDump>[0])}
+            onRetry={() => {
+              if (glbUrl) {
+                useGLTF.clear(glbUrl);
+                setPreflight((prev) => {
+                  const next = { ...prev };
+                  delete next[glbUrl];
+                  return next;
+                });
+              }
+              setLoadError(null);
+              setViewerRetry((n) => n + 1);
+            }}
+            onBack={() => {
+              setSelected(null);
+              setLoadError(null);
+              setGltfClips([]);
+              searchInputRef.current?.focus();
+            }}
+          />
+        ) : (
+        <div
+          className="viewer-canvas"
+          role="img"
+          aria-label={canvasAriaLabel(selected)}
+          data-testid="viewer-canvas"
+        >
+        {/* S3-D #86 — opaque drawing buffer: translucent GLB pixels must not show the page
+            background through (visible once the clear colour differs from the chrome bg). */}
+        <Canvas
+          camera={{ position: [2, 1.5, 3], fov: 50 }}
+          shadows={viewDraft.shadows}
+          gl={{ alpha: false }}
+        >
+          <color attach="background" args={[canvasTheme.clear]} />
           <ambientLight intensity={0.65} />
           <directionalLight
             position={[3, 5, 2]}
@@ -1469,7 +1765,12 @@ export function App() {
             shadow-mapSize-width={1024}
             shadow-mapSize-height={1024}
           />
-          <Grid infiniteGrid fadeDistance={20} sectionColor="#333" cellColor="#222" />
+          <Grid
+            infiniteGrid
+            fadeDistance={20}
+            sectionColor={canvasTheme.gridSection}
+            cellColor={canvasTheme.gridCell}
+          />
           {viewDraft.ground ? (
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
@@ -1478,10 +1779,11 @@ export function App() {
               userData={{ gpGround: true }}
             >
               <planeGeometry args={[40, 40]} />
-              <meshStandardMaterial color="#1a1e28" transparent opacity={0.5} />
+              <meshStandardMaterial color={canvasTheme.ground} />
             </mesh>
           ) : null}
-          <OrbitControls makeDefault ref={controlsRef} />
+          {/* S3-D #90 — no inertial damping when motion is reduced */}
+          <OrbitControls makeDefault ref={controlsRef} enableDamping={!reducedMotion} />
           <Suspense fallback={null}>
             {isScene
               ? sceneNodes.map((n) => {
@@ -1494,7 +1796,9 @@ export function App() {
                     child?.clipUx?.defaultClip ||
                     (child?.clips && child.clips[0]) ||
                     undefined;
-                  if (!child || !child.formats?.glb) {
+                  const childPf = childUrl ? preflight[childUrl] : undefined;
+                  if (childUrl && child?.formats?.glb && !childPf) return null; // preflight pending
+                  if (!child || !child.formats?.glb || (childPf && !childPf.ok)) {
                     return (
                       <SceneNodeMissing
                         key={n.id}
@@ -1507,7 +1811,7 @@ export function App() {
                     <SceneNodeModel
                       key={n.id}
                       url={childUrl!}
-                      clipName={clipForNode}
+                      clipName={reducedMotion ? undefined : clipForNode}
                       transform={n.transform}
                       highlighted={sceneNodeId === n.id}
                       selected={sceneNodeId === n.id}
@@ -1537,7 +1841,7 @@ export function App() {
                     />
                   );
                 })
-              : glbUrl && !loadError ? (
+              : glbUrl && !loadError && singlePreflight?.ok ? (
                   <GltfPlayer
                     url={glbUrl}
                     clipName={clip}
@@ -1548,7 +1852,7 @@ export function App() {
                     onClips={setGltfClips}
                     onError={setLoadError}
                     onDuration={setDuration}
-                    blendMs={blendMs}
+                    blendMs={effectiveBlendMs(blendMs, reducedMotion)}
                     timeScale={timeScale}
                     wireframe={wireframe}
                     bones={showBones && bonesAvailable}
@@ -1559,6 +1863,9 @@ export function App() {
                 ) : null}
           </Suspense>
         </Canvas>
+        </div>
+        )}
+        </ErrorBoundary>
         {selected && (
           <div className="import-meta-panel" aria-label="Import metadata">
             <div className="import-meta-title">
@@ -1692,6 +1999,45 @@ export function App() {
                 <code>{selected.license}</code>
               </div>
             )}
+            {(() => {
+              const st = altTextState(altDraft);
+              const dirty = st.trimmed !== (selected.altText ?? "");
+              return (
+                <div className="import-meta-actions alt-text-edit" data-testid="alt-text-edit">
+                  <label htmlFor="alt-text-input" className="muted">
+                    Alt text (optional)
+                  </label>
+                  <textarea
+                    id="alt-text-input"
+                    rows={3}
+                    value={altDraft}
+                    aria-describedby="alt-text-counter"
+                    onChange={(e) => setAltDraft(e.target.value)}
+                  />
+                  <div className="scene-author-actions">
+                    <span
+                      id="alt-text-counter"
+                      className={st.over ? "alt-text-counter over" : "alt-text-counter"}
+                      data-testid="alt-text-counter"
+                      aria-live="polite"
+                    >
+                      {st.counter}
+                    </span>
+                    <button
+                      type="button"
+                      className="tiny primary"
+                      data-testid="alt-text-save"
+                      disabled={altSaving || st.over || !dirty}
+                      title={st.over ? `Max ${ALT_TEXT_MAX} characters` : "PATCH altText (empty clears)"}
+                      onClick={() => void saveAltText()}
+                    >
+                      {altSaving ? "Saving…" : "Save alt text"}
+                    </button>
+                  </div>
+                  {altError && <p className="err">{altError}</p>}
+                </div>
+              );
+            })()}
             {selected.clipDurations &&
               Object.keys(selected.clipDurations).length > 0 && (
                 <div className="import-meta-actions">
@@ -1825,6 +2171,21 @@ export function App() {
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
+            {(() => {
+              // S3-D #127 / R1 §6 — V4a ambiguity links to the conflicting assets
+              const amb = ambiguousSlugOf(sceneSaveError);
+              if (!amb) return null;
+              const hits = assets.filter((a) => a.slug === amb);
+              return hits.length ? (
+                <div className="scene-author-actions" aria-label="Conflicting assets">
+                  {hits.map((a) => (
+                    <button key={a.id} type="button" className="tiny" onClick={() => setSelected(a)}>
+                      {a.slug} · {a.id.slice(0, 8)}
+                    </button>
+                  ))}
+                </div>
+              ) : null;
+            })()}
             <ul className="scene-node-list">
               {sceneDraft.map((n) => {
                 const child = resolveChild(n.assetId);
@@ -2122,6 +2483,38 @@ export function App() {
               onChange={(e) => setShowBones(e.target.checked)}
             />
             Bones
+          </label>
+          <label title="Session only — follows prefers-color-scheme on “system”">
+            Theme
+            <select
+              className="session-pref"
+              aria-label="Theme (session)"
+              data-testid="theme-select"
+              value={themePref}
+              onChange={(e) => setThemePref(e.target.value as ThemePref)}
+            >
+              {THEME_PREFS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title="Session only — follows prefers-reduced-motion on “system”">
+            Motion
+            <select
+              className="session-pref"
+              aria-label="Motion (session)"
+              data-testid="motion-select"
+              value={motionPref}
+              onChange={(e) => setMotionPref(e.target.value as MotionPref)}
+            >
+              {MOTION_PREFS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
           </label>
             </div>
             <span className="dock-divider" aria-hidden="true" />

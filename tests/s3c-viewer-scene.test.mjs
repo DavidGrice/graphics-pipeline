@@ -283,7 +283,7 @@ after(async () => {
 
 test("T1.4 soft-env :8787 clip-ux blend/timescale round-trip; out of range 400; clipDurations untouched", async (t) => {
   if (!(await apiUp())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const id = randomUUID();
@@ -303,7 +303,7 @@ test("T1.4 soft-env :8787 clip-ux blend/timescale round-trip; out of range 400; 
 
 test("T1.5 soft-env :8787 scene view + cameras persist; 17th camera 400; NaN 400; duplicate persists", async (t) => {
   if (!(await apiUp())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const cid = randomUUID();
@@ -334,7 +334,7 @@ test("T1.5 soft-env :8787 scene view + cameras persist; 17th camera 400; NaN 400
 
 test("tip3 soft-env :8787 DELETE /api/assets/:id: 404 unknown, 409 while scene references, 204 then gone", async (t) => {
   if (!(await apiUp())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const cid = randomUUID();

@@ -16,7 +16,7 @@ const RUN_MVP = path.join(ROOT, "apps/blender-pipeline/run_mvp.sh");
 
 test("S2-A: SMOKE_LIVE=1 fails closed when BLENDER_BIN missing (exit 127)", (t) => {
   if (!findBash()) {
-    t.skip("bash not available (need Git Bash on Windows)");
+    t.skip("SKIP_PLATFORM: bash not available (need Git Bash on Windows)");
     return;
   }
   const inbox = path.join(ROOT, "data/inbox/s2a-prep");

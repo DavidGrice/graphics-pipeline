@@ -33,7 +33,7 @@ async function findDemo() {
 
 test("T1.3: health + list + GLB file for demo asset", async (t) => {
   if (!(await up())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const health = await (await fetch(`${API}/api/health`)).json();
@@ -42,7 +42,7 @@ test("T1.3: health + list + GLB file for demo asset", async (t) => {
   const doc = await findDemo();
   if (!doc) {
     t.skip(
-      `demo asset ${ASSET} not seeded — soft-env skip (seed via register_asset / make_demo_glb)`,
+      `SKIP_NO_API: demo asset ${ASSET} not seeded — soft-env skip (seed via register_asset / make_demo_glb)`,
     );
     return;
   }
@@ -57,7 +57,7 @@ test("T1.3: health + list + GLB file for demo asset", async (t) => {
 
 test("T2: API rejects OBJ+clips and clips without glb", async (t) => {
   if (!(await up())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const now = new Date().toISOString();
@@ -104,7 +104,7 @@ test("T2: API rejects OBJ+clips and clips without glb", async (t) => {
 
 test("T3.7: missing GLB on disk → 404", async (t) => {
   if (!(await up())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const r = await fetch(

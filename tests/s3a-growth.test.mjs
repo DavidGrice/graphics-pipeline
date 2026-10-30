@@ -212,7 +212,7 @@ async function apiUp() {
 
 test("T1.6/T1.7 soft-env: health tools + PATCH/search", async (t) => {
   if (!(await apiUp())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const health = await (await fetch(`${API}/api/health`)).json();
@@ -229,7 +229,7 @@ test("T1.6/T1.7 soft-env: health tools + PATCH/search", async (t) => {
   const list = await (await fetch(`${API}/api/assets`)).json();
   assert.ok(Array.isArray(list));
   if (list.length === 0) {
-    t.skip("no assets registered for PATCH/search soft-env");
+    t.skip("SKIP_NO_API: no assets registered for PATCH/search soft-env");
     return;
   }
   const target = list[0];

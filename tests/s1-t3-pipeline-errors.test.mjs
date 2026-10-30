@@ -14,7 +14,7 @@ const PIPELINE = path.join(ROOT, "apps/blender-pipeline/pipeline.sh");
 
 test("T3.5: missing Blender binary fails clearly (exit 127)", (t) => {
   if (!findBash()) {
-    t.skip("bash not available (need Git Bash on Windows)");
+    t.skip("SKIP_PLATFORM: bash not available (need Git Bash on Windows)");
     return;
   }
   const r = spawnBash(PIPELINE, [
@@ -30,7 +30,7 @@ test("T3.5: missing Blender binary fails clearly (exit 127)", (t) => {
 
 test("T3.4: missing inbox PNG fails before Blender invoke", (t) => {
   if (!findBash()) {
-    t.skip("bash not available (need Git Bash on Windows)");
+    t.skip("SKIP_PLATFORM: bash not available (need Git Bash on Windows)");
     return;
   }
   const fake = path.join(ROOT, "tests/fixtures/fake-blender.sh");

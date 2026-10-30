@@ -5,15 +5,20 @@
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
  *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
+ * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { probeGlb, assertSingleArmature } from "./probe_glb.mjs";
+import { probeGlb, assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
+import { premultWarningForPng } from "./png_alpha.mjs";
+import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
+// S3-D: WB_DATA_ROOT mirrors the API override (hermetic tests); default repo data/.
+const DATA_DIR = process.env.WB_DATA_ROOT ? path.resolve(process.env.WB_DATA_ROOT) : path.join(REPO, "data");
 
 function arg(name, fallback) {
   const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -118,7 +123,32 @@ if (importMetaPath) {
   }
 }
 
-const probed = probeGlb(glbAbs);
+// S3-D #76 — size cap BEFORE probe (probe reads the whole file). Exit 4 = GLB_TOO_LARGE.
+{
+  let mb;
+  try {
+    mb = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  } catch (err) {
+    console.error(`ERROR ${err.message}`);
+    process.exit(2);
+  }
+  const sizeBytes = fs.statSync(glbAbs).size;
+  const maxBytes = maxGlbBytes(mb);
+  if (sizeBytes > maxBytes) {
+    console.error(`ERROR GLB_TOO_LARGE: ${sizeBytes} bytes > ${maxBytes} (MAX_GLB_MB=${mb}) — not probed, not registered`);
+    process.exit(4);
+  }
+}
+
+// S3-D tip1.1 NIT-1 — truncated / bad-magic / unparsable GLB → one clean line, exit 5.
+let probed;
+try {
+  probed = probeGlb(glbAbs);
+} catch (err) {
+  const reason = err?.code === GLB_CORRUPT ? err.reason : "unreadable GLB";
+  console.error(`ERROR ${GLB_CORRUPT}: ${path.basename(glbAbs)}: ${reason} — not registered`);
+  process.exit(5);
+}
 console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
 );
@@ -184,7 +214,44 @@ if (errs.length) {
   process.exit(1);
 }
 
-const assetDir = path.join(REPO, "data", "assets", id);
+// S3-D #49/#97 — warn-only findings → importMeta.warnings[] (never block register,
+// except the existing humanoid gate when its only idle is a static pose).
+/** @type {{ code: string, message?: string, detail?: Record<string, unknown>, clip?: string }[]} */
+const warnings = [];
+const pngForAlpha = sourceSrc || previewSrc;
+if (pngForAlpha && fs.existsSync(pngForAlpha)) {
+  const w = premultWarningForPng(path.resolve(pngForAlpha));
+  if (w) {
+    warnings.push(w);
+    console.warn(`WARN ${w.code}: ${w.message}`);
+  }
+}
+// #97 (R1 rev2 §5): idle candidates = clip named "idle" + actionMap sources mapped to idle.
+const idleCandidates = new Set(probed.clips.includes("idle") ? ["idle"] : []);
+for (const [src, dst] of Object.entries(importMeta?.actionMap ?? {})) {
+  if (dst === "idle" && probed.clips.includes(src)) idleCandidates.add(src);
+}
+const tposeClips = [...idleCandidates].filter((c) => probed.clipMotion?.[c]?.static === true);
+for (const c of tposeClips) {
+  const m = probed.clipMotion[c];
+  warnings.push({
+    code: IDLE_TPOSE_SUSPECT,
+    clip: c,
+    message: `clip "${c}" looks like a static/T-pose idle (max bone rotation ${m.maxRotDeg}° < 0.5°) — excluded from the default idle slot`,
+    detail: { maxRotDeg: m.maxRotDeg, maxPosDelta: m.maxPosDelta },
+  });
+  console.warn(`WARN ${IDLE_TPOSE_SUSPECT}: clip "${c}" max rotation ${m.maxRotDeg}°`);
+}
+const idleExcluded = tposeClips.length > 0;
+// Existing S2-D humanoid gate: the idle slot must be filled by a non-T-pose clip.
+if (characterType === "humanoid" && idleExcluded && [...idleCandidates].every((c) => tposeClips.includes(c))) {
+  console.error(
+    `ERROR: register validation failed:\n - characterType "humanoid" requires clips idle and walk (idle slot empty: ${IDLE_TPOSE_SUSPECT} on ${tposeClips.join(", ")})`,
+  );
+  process.exit(1);
+}
+
+const assetDir = path.join(DATA_DIR, "assets", id);
 fs.mkdirSync(assetDir, { recursive: true });
 const glbDest = path.join(assetDir, "model.glb");
 fs.copyFileSync(glbAbs, glbDest);
@@ -215,15 +282,20 @@ const body = {
     preview: previewDest
       ? `assets/${id}/preview.png`
       : `assets/${id}/model.glb`,
-    sourcePng:
-      sourceSrc || previewSrc
-        ? path
-            .relative(
-              path.join(REPO, "data"),
-              path.resolve(sourceSrc || previewSrc),
-            )
-            .replace(/\\/g, "/")
-        : undefined,
+    // S3-D #141 — sourcePng is only recorded when it really lives under data/inbox
+    sourcePng: (() => {
+      const src = sourceSrc || previewSrc;
+      if (!src || !fs.existsSync(src)) return undefined;
+      const inboxDir = path.join(DATA_DIR, "inbox");
+      if (!fs.existsSync(inboxDir)) return undefined;
+      const inbox = fs.realpathSync(inboxDir);
+      const real = fs.realpathSync(path.resolve(src));
+      if (!real.startsWith(inbox + path.sep)) {
+        console.warn("sourcePng omitted: source PNG is outside data/inbox");
+        return undefined;
+      }
+      return `inbox/${path.relative(inbox, real).replace(/\\/g, "/")}`;
+    })(),
   },
   rig: {
     hasArmature: probed.hasArmature,
@@ -235,6 +307,22 @@ const body = {
   createdAt: now,
   updatedAt: now,
 };
+if (warnings.length) {
+  importMeta = importMeta ?? { source: pngForAlpha ? "png_pipeline" : "unknown" };
+  importMeta.warnings = warnings;
+}
+if (idleExcluded) {
+  // R1 §5: T-pose idle stays in clips but never fills the default / actionMap idle slot.
+  if (tposeClips.includes("idle")) {
+    const fallback = ["walk", ...probed.clips].find((c) => !tposeClips.includes(c) && probed.clips.includes(c));
+    if (fallback) body.clipUx = { defaultClip: fallback };
+  }
+  if (importMeta?.actionMap) {
+    for (const [src, dst] of Object.entries(importMeta.actionMap)) {
+      if (dst === "idle" && tposeClips.includes(src)) delete importMeta.actionMap[src];
+    }
+  }
+}
 if (importMeta) {
   body.importMeta = importMeta;
 }
@@ -246,7 +334,20 @@ const res = await fetch(`${api}/api/assets`, {
 });
 const text = await res.text();
 if (!res.ok) {
-  console.error("POST failed", res.status, text);
+  // nothing was registered → do not leave the copied GLB/preview behind as an orphan
+  fs.rmSync(assetDir, { recursive: true, force: true });
+  let j = null;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    /* non-JSON */
+  }
+  if (res.status === 409 && j?.code === "SLUG_CLASH") {
+    // S3-D #127 — clean one-liner with the server's suggestion
+    console.error(`ERROR SLUG_CLASH: slug "${j.slug}" is already used by ${j.existingId}; retry with --slug ${j.suggestedSlug}`);
+  } else {
+    console.error("POST failed", res.status, text);
+  }
   process.exit(1);
 }
 console.log(text);

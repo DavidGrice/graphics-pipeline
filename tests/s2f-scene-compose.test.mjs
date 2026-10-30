@@ -196,7 +196,7 @@ async function apiUp() {
 
 test("soft-env API: V4 unknown reject when :8787 up", async (t) => {
   if (!(await apiUp())) {
-    t.skip("world-builder not listening on :8787 (soft-env)");
+    t.skip("SKIP_NO_API: world-builder not listening on :8787 (soft-env)");
     return;
   }
   const now = new Date().toISOString();

@@ -20,10 +20,29 @@ API="${API:-http://127.0.0.1:8787}"
 SMOKE_LIVE="${SMOKE_LIVE:-0}"
 BLENDER_BIN="${BLENDER_BIN:-blender}"
 
+# S3-D #141 — slug must match the schema regex before it builds any path (bad → exit 2).
+if [[ ! "${SLUG}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+  echo "ERROR PATH_OUTSIDE_INBOX: slug must match ^[a-z0-9]+(-[a-z0-9]+)*\$" >&2
+  exit 2
+fi
+
 # Find newest inbox PNG for slug, or create demo via smoke
-INBOX_DIR="${REPO}/data/inbox/${SLUG}"
+INBOX_ROOT="${REPO}/data/inbox"
+INBOX_DIR="${INBOX_ROOT}/${SLUG}"
 mkdir -p "${INBOX_DIR}"
 PNG="$(ls -1t "${INBOX_DIR}"/*.png 2>/dev/null | head -1 || true)"
+# realpath containment: a symlinked slug dir or PNG escaping data/inbox → exit 2
+inbox_guard() {
+  local root real
+  root="$(realpath "${INBOX_ROOT}")"
+  real="$(realpath "$1")"
+  if [[ "${real}" != "${root}/"* ]]; then
+    echo "ERROR PATH_OUTSIDE_INBOX: inbox entry resolves outside data/inbox" >&2
+    exit 2
+  fi
+}
+inbox_guard "${INBOX_DIR}"
+if [[ -n "${PNG}" ]]; then inbox_guard "${PNG}"; fi
 if [[ -z "${PNG}" ]]; then
   if [[ "${SMOKE_LIVE}" == "1" ]]; then
     echo "ERROR: SMOKE_LIVE=1 requires a real inbox PNG under ${INBOX_DIR}" >&2
@@ -33,6 +52,7 @@ if [[ -z "${PNG}" ]]; then
   echo "No inbox PNG for ${SLUG}; writing demo PNG via mcp-krita smoke…"
   (cd "${REPO}" && npm run smoke:demo -w @graphics-pipeline/mcp-krita -- --slug="${SLUG}" >/dev/null)
   PNG="$(ls -1t "${INBOX_DIR}"/*.png | head -1)"
+  inbox_guard "${PNG}"
 fi
 
 ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"

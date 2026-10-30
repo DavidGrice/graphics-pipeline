@@ -8,9 +8,38 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
-import { safeParseAsset, ClipUxSchema } from "@graphics-pipeline/asset-schema";
+import {
+  safeParseAsset,
+  ClipUxSchema,
+  parseMaxGlbMb,
+  maxGlbBytes,
+  ALT_TEXT_MAX,
+  suggestSlug,
+} from "@graphics-pipeline/asset-schema";
+
+/**
+ * S3-D #88 — normalise altText. Returns { value } (undefined = clear) or { error } envelope args.
+ * Trimmed; "" clears; > ALT_TEXT_MAX → ALT_TEXT_TOO_LONG; non-string → VALIDATION.
+ */
+function normaliseAltText(raw) {
+  if (raw === null) return { value: undefined };
+  if (typeof raw !== "string") return { error: ["VALIDATION", "altText must be a string"] };
+  const t = raw.trim();
+  if (t.length > ALT_TEXT_MAX) {
+    return {
+      error: ["ALT_TEXT_TOO_LONG", `altText is ${t.length} characters; max ${ALT_TEXT_MAX}`, { length: t.length, max: ALT_TEXT_MAX }],
+    };
+  }
+  return { value: t.length ? t : undefined };
+}
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
+import { sendError, sendInternal, sendValidation } from "./errors.js";
+import {
+  resolveUnder,
+  PathGuardError,
+  PATH_OUTSIDE_INBOX,
+} from "./pathGuard.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -76,8 +105,67 @@ async function probeToolVersions() {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../");
-const DATA_ROOT = path.join(REPO_ROOT, "data");
+// WB_DATA_ROOT (S3-D): hermetic tests point the API at a tmp data dir; default repo data/.
+const DATA_ROOT = process.env.WB_DATA_ROOT
+  ? path.resolve(process.env.WB_DATA_ROOT)
+  : path.join(REPO_ROOT, "data");
 const ASSETS_DIR = path.join(DATA_ROOT, "assets");
+const INBOX_ROOT = path.join(DATA_ROOT, "inbox");
+
+// S3-D #76 — MAX_GLB_MB (default 100, integer ≥ 1). Invalid → refuse to start (fail-closed).
+let MAX_GLB_MB;
+try {
+  MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
+} catch (err) {
+  console.error(`[world-builder] FATAL ${err.message}`);
+  process.exit(1);
+}
+const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
+
+const FORMAT_KEYS = ["glb", "fbx", "obj", "preview"];
+
+/**
+ * S3-D #141 (R1 rev2 §3) — every formats.* path must stay under DATA_ROOT; sourcePng under
+ * data/inbox. Any escape → PATH_OUTSIDE_INBOX. Neither the input nor the resolved path is echoed.
+ * @returns {{ abs: Record<string,string> } | { code: string, field: string, reason: string }}
+ */
+function guardFormats(formats) {
+  /** @type {Record<string, string>} */
+  const abs = {};
+  if (!formats || typeof formats !== "object") return { abs };
+  for (const key of FORMAT_KEYS) {
+    const v = formats[key];
+    if (v === undefined) continue;
+    try {
+      abs[key] = resolveUnder(DATA_ROOT, v, { stripPrefix: /^data\// });
+    } catch (err) {
+      if (err instanceof PathGuardError) {
+        return { code: err.code, field: `formats.${key}`, reason: err.reason };
+      }
+      throw err;
+    }
+  }
+  if (formats.sourcePng !== undefined) {
+    const v = formats.sourcePng;
+    try {
+      const s = typeof v === "string" ? v.replace(/\\/g, "/").replace(/^data\//, "") : v;
+      if (typeof s !== "string" || !s.startsWith("inbox/")) {
+        throw new PathGuardError(PATH_OUTSIDE_INBOX, "sourcePng must be under inbox/");
+      }
+      abs.sourcePng = resolveUnder(INBOX_ROOT, s.slice("inbox/".length), { code: PATH_OUTSIDE_INBOX });
+    } catch (err) {
+      if (err instanceof PathGuardError) {
+        return { code: PATH_OUTSIDE_INBOX, field: "formats.sourcePng", reason: err.reason };
+      }
+      throw err;
+    }
+  }
+  return { abs };
+}
+
+function sendPathError(res, g) {
+  return sendError(res, 400, g.code, `${g.field}: path rejected (${g.reason})`, { field: g.field });
+}
 
 const PORT = Number(process.env.PORT || 8787);
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
@@ -109,6 +197,17 @@ function collection() {
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
+// S3-D R1 §0 — body-parser failures use the same envelope (no HTML error pages).
+app.use((err, _req, res, next) => {
+  if (!err) return next();
+  if (err.type === "entity.too.large") {
+    return sendError(res, 413, "PAYLOAD_TOO_LARGE", "JSON body exceeds 2mb");
+  }
+  if (err.type === "entity.parse.failed") {
+    return sendError(res, 400, "INVALID_JSON", "request body is not valid JSON");
+  }
+  return next(err);
+});
 
 // Static disk assets (GLB / preview)
 app.use("/data", express.static(DATA_ROOT));
@@ -159,13 +258,20 @@ app.get("/api/health", async (_req, res) => {
 
   const ok = strict ? krita.ok : true;
   const status = ok ? 200 : 503;
+  // R1 nit: a 5xx body never carries absolute paths — strip tool paths/dataRoot on 503.
+  const safeTools = ok
+    ? tools
+    : Object.fromEntries(
+        Object.entries(tools).map(([k, v]) => [k, v ? { version: v.version } : null]),
+      );
   res.status(status).json({
+    ...(ok ? {} : { code: "KRITA_DOWN", error: "strict Krita health check failed" }),
     ok,
     mongo: Boolean(db),
     krita,
-    tools,
+    tools: safeTools,
     blender: tools.blender?.version ?? null,
-    dataRoot: DATA_ROOT,
+    ...(ok ? { dataRoot: DATA_ROOT } : {}),
     strictKrita: strict,
     ...(bridgeMode === "mock" ? { bridge: "mock" } : {}),
   });
@@ -176,7 +282,7 @@ app.get("/api/assets", async (req, res) => {
     const col = collection();
     res.setHeader("X-Store", col ? "mongo" : "memory");
     if (process.env.MONGO_REQUIRED === "1" && !col) {
-      return res.status(503).json({ error: "Mongo required but unavailable" });
+      return sendError(res, 503, "MONGO_REQUIRED", "Mongo required but unavailable");
     }
 
     const qList = queryStringList(req.query.q).map((s) => s.toLowerCase());
@@ -184,12 +290,29 @@ app.get("/api/assets", async (req, res) => {
     const characterTypeList = queryStringList(req.query.characterType);
     const clipList = queryStringList(req.query.clip);
     const tagList = queryStringList(req.query.tag);
+    // S3-D #94 — optional ?sort=-createdAt|createdAt and ?limit=1..100
+    const sortList = queryStringList(req.query.sort);
+    const limitList = queryStringList(req.query.limit);
+    if (sortList.length > 1 || (sortList.length && !["-createdAt", "createdAt"].includes(sortList[0]))) {
+      return sendError(res, 400, "VALIDATION", 'sort must be "-createdAt" or "createdAt"');
+    }
+    let limit = null;
+    if (limitList.length) {
+      const l = limitList[0];
+      if (limitList.length > 1 || !/^[0-9]+$/.test(l) || Number(l) < 1 || Number(l) > 100) {
+        return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100");
+      }
+      limit = Number(l);
+    }
 
     for (const stage of stageList) {
       if (!VALID_STAGES.has(stage)) {
-        return res.status(400).json({
-          error: `unknown stage "${stage}" (expected mvp-billboard|rigged|scene)`,
-        });
+        return sendError(
+          res,
+          400,
+          "VALIDATION",
+          `unknown stage "${stage}" (expected mvp-billboard|rigged|scene)`,
+        );
       }
     }
 
@@ -227,9 +350,26 @@ app.get("/api/assets", async (req, res) => {
       return true;
     });
 
-    return res.json(filtered);
+    let out = filtered;
+    if (sortList.length) {
+      const dir = sortList[0].startsWith("-") ? -1 : 1;
+      const ts = (d) => {
+        const t = Date.parse(d?.createdAt ?? "");
+        return Number.isFinite(t) ? t : null;
+      };
+      // stable; legacy assets without a parseable createdAt always sort last
+      out = filtered
+        .map((d, i) => ({ d, i, t: ts(d) }))
+        .sort((a, b) => {
+          if (a.t == null || b.t == null) return (a.t == null) - (b.t == null) || a.i - b.i;
+          return (a.t - b.t) * dir || a.i - b.i;
+        })
+        .map((x) => x.d);
+    }
+    if (limit != null) out = out.slice(0, limit);
+    return res.json(out);
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -239,10 +379,10 @@ app.get("/api/assets/:id", async (req, res) => {
     const doc = col
       ? await col.findOne({ id: req.params.id })
       : memoryAssets.get(req.params.id) ?? null;
-    if (!doc) return res.status(404).json({ error: "not found" });
+    if (!doc) return sendError(res, 404, "NOT_FOUND", "not found");
     res.json(doc);
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -250,30 +390,73 @@ app.post("/api/assets", async (req, res) => {
   try {
     const body = req.body;
     if (!body?.id || !body?.slug) {
-      return res.status(400).json({ error: "id and slug required" });
+      return sendError(res, 400, "VALIDATION", "id and slug required");
     }
+    // S3-D #88 — altText normalised before schema (ALT_TEXT_TOO_LONG beats generic VALIDATION)
+    if (Object.prototype.hasOwnProperty.call(body, "altText")) {
+      const a = normaliseAltText(body.altText);
+      if (a.error) return sendError(res, 400, ...a.error);
+      if (a.value === undefined) delete body.altText;
+      else body.altText = a.value;
+    }
+    // S3-D #94 — history needs createdAt; stamp it when the client omitted it
+    if (body.createdAt == null) body.createdAt = new Date().toISOString();
+    if (body.updatedAt == null) body.updatedAt = body.createdAt;
     // Soft invariant: clips ⇒ glb or fbx, never obj for anim
     if (Array.isArray(body.clips) && body.clips.length > 0) {
       if (!body.formats?.glb && !body.formats?.fbx) {
-        return res
-          .status(400)
-          .json({ error: "formats.glb or formats.fbx required when clips present" });
+        return sendError(res, 400, "VALIDATION", "formats.glb or formats.fbx required when clips present");
       }
       if (body.formats?.obj) {
-        return res
-          .status(400)
-          .json({ error: "formats.obj forbidden for animated assets (use GLB or FBX)" });
+        return sendError(
+          res,
+          400,
+          "VALIDATION",
+          "formats.obj forbidden for animated assets (use GLB or FBX)",
+        );
+      }
+    }
+
+    // S3-D #141 — containment before any fs touch; #76 — size cap before schema/probe.
+    const guard = guardFormats(body.formats);
+    if ("code" in guard) return sendPathError(res, guard);
+    if (guard.abs.glb && fs.existsSync(guard.abs.glb)) {
+      const sizeBytes = fs.statSync(guard.abs.glb).size;
+      if (sizeBytes > MAX_GLB_BYTES) {
+        return sendError(
+          res,
+          413,
+          "GLB_TOO_LARGE",
+          `GLB is ${sizeBytes} bytes; max is ${MAX_GLB_BYTES} (MAX_GLB_MB=${MAX_GLB_MB})`,
+          { sizeBytes, maxBytes: MAX_GLB_BYTES },
+        );
       }
     }
 
     // S2-E: schema gates (scene stub, humanoid, formats, …)
     const parsed = safeParseAsset(body);
-    if (!parsed.success) {
-      const msg = parsed.error.issues.map((i) => i.message).join("; ");
-      return res.status(400).json({ error: msg, issues: parsed.error.issues });
-    }
+    if (!parsed.success) return sendValidation(res, parsed);
 
     const col = collection();
+    // S3-D #127 — a slug owned by a different id → 409 SLUG_CLASH (same id re-register is idempotent)
+    {
+      const owners = col
+        ? await col.find({ slug: body.slug }).toArray()
+        : [...memoryAssets.values()].filter((d) => d.slug === body.slug);
+      const other = owners.find((d) => d.id !== body.id);
+      if (other) {
+        const taken = new Set(
+          col
+            ? (await col.find({}, { projection: { slug: 1 } }).toArray()).map((d) => d.slug)
+            : [...memoryAssets.values()].map((d) => d.slug),
+        );
+        return sendError(res, 409, "SLUG_CLASH", `slug "${body.slug}" is already used by ${other.id}`, {
+          slug: body.slug,
+          existingId: other.id,
+          suggestedSlug: suggestSlug(body.slug, (s) => taken.has(s)),
+        });
+      }
+    }
     const resolveDoc = async (idOrSlug) => {
       if (col) {
         return (
@@ -308,7 +491,7 @@ app.post("/api/assets", async (req, res) => {
         normalize: true,
       });
       if (sceneErr) {
-        return res.status(400).json({ error: sceneErr });
+        return sendError(res, 400, "SCENE_RESOLVE", sceneErr);
       }
     }
 
@@ -322,7 +505,7 @@ app.post("/api/assets", async (req, res) => {
     }
     res.status(201).json(body);
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -336,13 +519,16 @@ app.patch("/api/assets/:id", async (req, res) => {
     const existing = col
       ? await col.findOne({ id })
       : memoryAssets.get(id) ?? null;
-    if (!existing) return res.status(404).json({ error: "not found" });
+    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
 
     for (const forbidden of ["formats", "clips", "rig", "stage", "id", "slug"]) {
       if (Object.prototype.hasOwnProperty.call(body, forbidden)) {
-        return res.status(400).json({
-          error: `PATCH cannot modify "${forbidden}" (use register/probe paths)`,
-        });
+        return sendError(
+          res,
+          400,
+          "PATCH_FORBIDDEN_FIELD",
+          `PATCH cannot modify "${forbidden}" (use register/probe paths)`,
+        );
       }
     }
 
@@ -370,10 +556,18 @@ app.patch("/api/assets/:id", async (req, res) => {
     if (body.license !== undefined) {
       patch.license = body.license;
     }
+    // S3-D #88 — altText: trimmed 1–280, "" or null clears, > 280 → ALT_TEXT_TOO_LONG
+    let clearAltText = false;
+    if (Object.prototype.hasOwnProperty.call(body, "altText")) {
+      const a = normaliseAltText(body.altText);
+      if (a.error) return sendError(res, 400, ...a.error);
+      if (a.value === undefined) clearAltText = true;
+      else patch.altText = a.value;
+    }
     // S3-B #91 — merge importMeta (do not wipe unrelated fields)
     if (body.importMeta !== undefined) {
       if (body.importMeta === null || typeof body.importMeta !== "object") {
-        return res.status(400).json({ error: "importMeta must be an object" });
+        return sendError(res, 400, "VALIDATION", "importMeta must be an object");
       }
       patch.importMeta = {
         ...(existing.importMeta || {}),
@@ -382,9 +576,12 @@ app.patch("/api/assets/:id", async (req, res) => {
     }
     // S3-B #8 HARDEN — forbid inventing clipDurations via PATCH
     if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
-      return res.status(400).json({
-        error: "PATCH cannot modify clipDurations (probe-only write)",
-      });
+      return sendError(
+        res,
+        400,
+        "PATCH_FORBIDDEN_FIELD",
+        "PATCH cannot modify clipDurations (probe-only write)",
+      );
     }
 
     const prevVer =
@@ -394,9 +591,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     if (body.assetSchemaVersion != null) {
       const nextVer = Number(body.assetSchemaVersion);
       if (!Number.isFinite(nextVer) || nextVer < prevVer) {
-        return res.status(400).json({
-          error: "assetSchemaVersion cannot decrement",
-        });
+        return sendError(res, 400, "SCHEMA_VERSION_DECREMENT", "assetSchemaVersion cannot decrement");
       }
       patch.assetSchemaVersion = nextVer;
     } else if (existing.assetSchemaVersion == null) {
@@ -408,12 +603,10 @@ app.patch("/api/assets/:id", async (req, res) => {
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (clearAltText) delete next.altText;
 
     const parsed = safeParseAsset(next);
-    if (!parsed.success) {
-      const msg = parsed.error.issues.map((i) => i.message).join("; ");
-      return res.status(400).json({ error: msg, issues: parsed.error.issues });
-    }
+    if (!parsed.success) return sendValidation(res, parsed);
 
     if (next.stage === "scene" && next.scene?.nodes) {
       const resolveDoc = async (idOrSlug) => {
@@ -445,18 +638,18 @@ app.patch("/api/assets/:id", async (req, res) => {
         normalize: true,
       });
       if (sceneErr) {
-        return res.status(400).json({ error: sceneErr });
+        return sendError(res, 400, "SCENE_RESOLVE", sceneErr);
       }
     }
 
     if (col) {
-      await col.updateOne({ id }, { $set: next });
+      await col.updateOne({ id }, clearAltText ? { $set: next, $unset: { altText: "" } } : { $set: next });
     } else {
       memoryAssets.set(id, next);
     }
     res.json(next);
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -481,18 +674,15 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
       }
     }
     if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
-      return res.status(400).json({ error: "clip-ux cannot modify clipDurations (probe-only write)" });
+      return sendError(res, 400, "PATCH_FORBIDDEN_FIELD", "clip-ux cannot modify clipDurations (probe-only write)");
     }
     const uxParsed = ClipUxSchema.safeParse(clipUx);
-    if (!uxParsed.success) {
-      const msg = uxParsed.error.issues.map((i) => i.message).join("; ");
-      return res.status(400).json({ error: msg, issues: uxParsed.error.issues });
-    }
+    if (!uxParsed.success) return sendValidation(res, uxParsed);
     const col = collection();
     const existing = col
       ? await col.findOne({ id })
       : memoryAssets.get(id) ?? null;
-    if (!existing) return res.status(404).json({ error: "not found" });
+    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
     const next = {
       ...existing,
       clipUx,
@@ -505,7 +695,7 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
     }
     res.json(next);
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -519,7 +709,7 @@ app.delete("/api/assets/:id", async (req, res) => {
     const id = req.params.id;
     const col = collection();
     const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
-    if (!existing) return res.status(404).json({ error: "not found" });
+    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
     const all = col ? await col.find({ stage: "scene" }).toArray() : [...memoryAssets.values()];
     const refs = all
       .filter((d) => d.stage === "scene" && d.id !== id)
@@ -528,13 +718,19 @@ app.delete("/api/assets/:id", async (req, res) => {
       )
       .map((d) => d.id);
     if (refs.length) {
-      return res.status(409).json({ error: `asset referenced by scene(s): ${refs.join(", ")}`, refs });
+      return sendError(
+        res,
+        409,
+        "ASSET_IN_USE",
+        `asset referenced by scene(s): ${refs.join(", ")}`,
+        { refs },
+      );
     }
     if (col) await col.deleteOne({ id });
     else memoryAssets.delete(id);
     res.status(204).end();
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -557,15 +753,26 @@ app.get("/api/assets/:id/file", async (req, res) => {
     } else {
       rel = doc?.formats?.glb ?? `assets/${req.params.id}/model.glb`;
     }
-    if (!rel) return res.status(404).json({ error: "no file path" });
-    // rel is under data/
-    const abs = path.join(DATA_ROOT, rel.replace(/^data\//, ""));
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ error: `file missing: ${abs}` });
+    if (!rel) return sendError(res, 404, "FILE_MISSING", "no file path");
+    // S3-D #141 — rel must stay under DATA_ROOT; 404 bodies carry rel, never abs.
+    let abs;
+    try {
+      abs = resolveUnder(DATA_ROOT, rel, { stripPrefix: /^data\// });
+    } catch (err) {
+      if (err instanceof PathGuardError) {
+        return sendError(res, 400, err.code, `stored path rejected (${err.reason})`, { field: `formats.${format}` });
+      }
+      throw err;
     }
-    res.sendFile(abs);
+    if (!fs.existsSync(abs)) {
+      return sendError(res, 404, "FILE_MISSING", `file missing: ${rel}`, { rel, assetId: req.params.id });
+    }
+    // fs errors (EACCES/EISDIR/…) surface here, not in the catch — keep them out of the body
+    res.sendFile(abs, (err) => {
+      if (err) sendInternal(req, res, err);
+    });
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -576,13 +783,24 @@ app.get("/api/assets/:id/preview", async (req, res) => {
       ? await col.findOne({ id: req.params.id })
       : memoryAssets.get(req.params.id) ?? null;
     const rel = doc?.formats?.preview ?? `assets/${req.params.id}/preview.png`;
-    const abs = path.join(DATA_ROOT, rel.replace(/^data\//, ""));
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ error: `preview missing: ${abs}` });
+    let abs;
+    try {
+      abs = resolveUnder(DATA_ROOT, rel, { stripPrefix: /^data\// });
+    } catch (err) {
+      if (err instanceof PathGuardError) {
+        return sendError(res, 400, err.code, `stored path rejected (${err.reason})`, { field: "formats.preview" });
+      }
+      throw err;
     }
-    res.sendFile(abs);
+    if (!fs.existsSync(abs)) {
+      return sendError(res, 404, "FILE_MISSING", `preview missing: ${rel}`, { rel, assetId: req.params.id });
+    }
+    // fs errors (EACCES/EISDIR/…) surface here, not in the catch — keep them out of the body
+    res.sendFile(abs, (err) => {
+      if (err) sendInternal(req, res, err);
+    });
   } catch (err) {
-    res.status(500).json({ error: String(err.message || err) });
+    sendInternal(req, res, err);
   }
 });
 
@@ -590,9 +808,14 @@ app.get("/api/assets/:id/preview", async (req, res) => {
 // S3-C openapi fix: JSON at .json (application/json), YAML at .yaml (application/yaml)
 registerOpenApiRoutes(app, REPO_ROOT);
 
+// R1 nit (tip1): JSON 404 for unknown routes (Express' HTML default echoes the URL path) and a
+// terminal error handler — no stack/err.message/absolute path ever reaches a response body.
+app.use((_req, res) => sendError(res, 404, "NOT_FOUND", "no such route"));
+app.use((err, req, res, _next) => sendInternal(req, res, err));
+
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 await connectMongo();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`[world-builder] http://127.0.0.1:${PORT}`);
+  console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB})`);
 });
