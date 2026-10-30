@@ -10,10 +10,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { probeGlb, assertSingleArmature } from "./probe_glb.mjs";
+import { probeGlb, assertSingleArmature, IDLE_TPOSE_SUSPECT } from "./probe_glb.mjs";
+import { premultWarningForPng } from "./png_alpha.mjs";
+import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
+// S3-D: WB_DATA_ROOT mirrors the API override (hermetic tests); default repo data/.
+const DATA_DIR = process.env.WB_DATA_ROOT ? path.resolve(process.env.WB_DATA_ROOT) : path.join(REPO, "data");
 
 function arg(name, fallback) {
   const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -118,6 +122,23 @@ if (importMetaPath) {
   }
 }
 
+// S3-D #76 — size cap BEFORE probe (probe reads the whole file). Exit 4 = GLB_TOO_LARGE.
+{
+  let mb;
+  try {
+    mb = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  } catch (err) {
+    console.error(`ERROR ${err.message}`);
+    process.exit(2);
+  }
+  const sizeBytes = fs.statSync(glbAbs).size;
+  const maxBytes = maxGlbBytes(mb);
+  if (sizeBytes > maxBytes) {
+    console.error(`ERROR GLB_TOO_LARGE: ${sizeBytes} bytes > ${maxBytes} (MAX_GLB_MB=${mb}) — not probed, not registered`);
+    process.exit(4);
+  }
+}
+
 const probed = probeGlb(glbAbs);
 console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
@@ -184,7 +205,44 @@ if (errs.length) {
   process.exit(1);
 }
 
-const assetDir = path.join(REPO, "data", "assets", id);
+// S3-D #49/#97 — warn-only findings → importMeta.warnings[] (never block register,
+// except the existing humanoid gate when its only idle is a static pose).
+/** @type {{ code: string, message?: string, detail?: Record<string, unknown>, clip?: string }[]} */
+const warnings = [];
+const pngForAlpha = sourceSrc || previewSrc;
+if (pngForAlpha && fs.existsSync(pngForAlpha)) {
+  const w = premultWarningForPng(path.resolve(pngForAlpha));
+  if (w) {
+    warnings.push(w);
+    console.warn(`WARN ${w.code}: ${w.message}`);
+  }
+}
+// #97 (R1 rev2 §5): idle candidates = clip named "idle" + actionMap sources mapped to idle.
+const idleCandidates = new Set(probed.clips.includes("idle") ? ["idle"] : []);
+for (const [src, dst] of Object.entries(importMeta?.actionMap ?? {})) {
+  if (dst === "idle" && probed.clips.includes(src)) idleCandidates.add(src);
+}
+const tposeClips = [...idleCandidates].filter((c) => probed.clipMotion?.[c]?.static === true);
+for (const c of tposeClips) {
+  const m = probed.clipMotion[c];
+  warnings.push({
+    code: IDLE_TPOSE_SUSPECT,
+    clip: c,
+    message: `clip "${c}" looks like a static/T-pose idle (max bone rotation ${m.maxRotDeg}° < 0.5°) — excluded from the default idle slot`,
+    detail: { maxRotDeg: m.maxRotDeg, maxPosDelta: m.maxPosDelta },
+  });
+  console.warn(`WARN ${IDLE_TPOSE_SUSPECT}: clip "${c}" max rotation ${m.maxRotDeg}°`);
+}
+const idleExcluded = tposeClips.length > 0;
+// Existing S2-D humanoid gate: the idle slot must be filled by a non-T-pose clip.
+if (characterType === "humanoid" && idleExcluded && [...idleCandidates].every((c) => tposeClips.includes(c))) {
+  console.error(
+    `ERROR: register validation failed:\n - characterType "humanoid" requires clips idle and walk (idle slot empty: ${IDLE_TPOSE_SUSPECT} on ${tposeClips.join(", ")})`,
+  );
+  process.exit(1);
+}
+
+const assetDir = path.join(DATA_DIR, "assets", id);
 fs.mkdirSync(assetDir, { recursive: true });
 const glbDest = path.join(assetDir, "model.glb");
 fs.copyFileSync(glbAbs, glbDest);
@@ -215,15 +273,20 @@ const body = {
     preview: previewDest
       ? `assets/${id}/preview.png`
       : `assets/${id}/model.glb`,
-    sourcePng:
-      sourceSrc || previewSrc
-        ? path
-            .relative(
-              path.join(REPO, "data"),
-              path.resolve(sourceSrc || previewSrc),
-            )
-            .replace(/\\/g, "/")
-        : undefined,
+    // S3-D #141 — sourcePng is only recorded when it really lives under data/inbox
+    sourcePng: (() => {
+      const src = sourceSrc || previewSrc;
+      if (!src || !fs.existsSync(src)) return undefined;
+      const inboxDir = path.join(DATA_DIR, "inbox");
+      if (!fs.existsSync(inboxDir)) return undefined;
+      const inbox = fs.realpathSync(inboxDir);
+      const real = fs.realpathSync(path.resolve(src));
+      if (!real.startsWith(inbox + path.sep)) {
+        console.warn("sourcePng omitted: source PNG is outside data/inbox");
+        return undefined;
+      }
+      return `inbox/${path.relative(inbox, real).replace(/\\/g, "/")}`;
+    })(),
   },
   rig: {
     hasArmature: probed.hasArmature,
@@ -235,6 +298,22 @@ const body = {
   createdAt: now,
   updatedAt: now,
 };
+if (warnings.length) {
+  importMeta = importMeta ?? { source: pngForAlpha ? "png_pipeline" : "unknown" };
+  importMeta.warnings = warnings;
+}
+if (idleExcluded) {
+  // R1 §5: T-pose idle stays in clips but never fills the default / actionMap idle slot.
+  if (tposeClips.includes("idle")) {
+    const fallback = ["walk", ...probed.clips].find((c) => !tposeClips.includes(c) && probed.clips.includes(c));
+    if (fallback) body.clipUx = { defaultClip: fallback };
+  }
+  if (importMeta?.actionMap) {
+    for (const [src, dst] of Object.entries(importMeta.actionMap)) {
+      if (dst === "idle" && tposeClips.includes(src)) delete importMeta.actionMap[src];
+    }
+  }
+}
 if (importMeta) {
   body.importMeta = importMeta;
 }
