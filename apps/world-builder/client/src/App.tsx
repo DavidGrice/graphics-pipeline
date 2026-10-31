@@ -58,6 +58,7 @@ import {
   wireNode,
   type ReplaceUndo,
 } from "./s3eScene";
+import { activityVerb, bridgeBadge, type ActivityItem, type BridgeInfo } from "./s3fActivity";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -815,14 +816,22 @@ export function App() {
   // S3-E #41 — asset delete (asset panel) with inline confirm + in-use hint
   const [assetDelConfirm, setAssetDelConfirm] = useState(false);
   const [assetDelMsg, setAssetDelMsg] = useState<string | null>(null);
+  // S3-F #52 — bridge status badge; #128 activity feed (refreshes whenever the asset list reloads,
+  // i.e. after every successful local mutation — no polling).
+  const [bridge, setBridge] = useState<BridgeInfo | null>(null);
+  const [activity, setActivity] = useState<{ items: ActivityItem[]; total: number } | null>(null);
+  const [activityErr, setActivityErr] = useState<string | null>(null);
+  const [activityLimit, setActivityLimit] = useState(20);
   // S3-E #38 — live-node cap from the API (GET, never rate-limited); default 256 if unreachable.
   useEffect(() => {
     let alive = true;
     fetch(`${API}/api/health`)
       .then((r) => r.json())
-      .then((j: { limits?: { sceneMaxNodes?: unknown } }) => {
+      .then((j: { limits?: { sceneMaxNodes?: unknown }; bridge?: unknown }) => {
         const m = j?.limits?.sceneMaxNodes;
         if (alive && typeof m === "number" && Number.isInteger(m) && m >= 1) setSceneMaxNodes(m);
+        // S3-F #52 — bridge badge from health (once; no polling)
+        if (alive && j?.bridge && typeof j.bridge === "object") setBridge(j.bridge as BridgeInfo);
       })
       .catch(() => {});
     return () => {
@@ -945,6 +954,25 @@ export function App() {
         {rateLimitMessage(rlLeft)}
       </p>
     ) : null;
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/api/activity?limit=${activityLimit}`)
+      .then(async (r) => {
+        const j = await r.json().catch(() => null);
+        if (!alive) return;
+        if (!r.ok || !j || !Array.isArray(j.items)) {
+          setActivityErr(j?.code ?? `HTTP ${r.status}`);
+          return;
+        }
+        setActivityErr(null);
+        setActivity({ items: j.items as ActivityItem[], total: Number(j.total) || j.items.length });
+      })
+      .catch(() => alive && setActivityErr("NETWORK"));
+    return () => {
+      alive = false;
+    };
+  }, [assets, activityLimit]);
 
   async function deleteSelectedAsset() {
     if (!selected) return;
@@ -1658,6 +1686,14 @@ export function App() {
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
         <p className="muted">localhost · Sprint 3-D</p>
+        {(() => {
+          const bb = bridgeBadge(bridge);
+          return (
+            <p className={`bridge-badge bridge-${bb.tone}`} data-testid="bridge-badge" title={bb.title} role="status">
+              <span aria-hidden="true">{bb.icon}</span> {bridge ? bb.text : "Krita: checking…"}
+            </p>
+          );
+        })()}
         <input
           ref={searchInputRef}
           className="search"
@@ -1741,6 +1777,56 @@ export function App() {
                 );
               })}
             </ol>
+          )}
+        </details>
+        {/* S3-F #128 — Activity (D1 §1): newest first, relative time with ISO title, slug links */}
+        <details className="activity-panel" open data-testid="activity-panel">
+          <summary>Activity{activity ? ` (${activity.total})` : ""}</summary>
+          {activityErr ? (
+            <p className="err" role="alert">
+              Activity unavailable ({activityErr})
+            </p>
+          ) : !activity ? (
+            <p className="muted">Loading…</p>
+          ) : activity.items.length === 0 ? (
+            <p className="muted">No activity yet.</p>
+          ) : (
+            <ol aria-label="Activity">
+              {activity.items.map((it, k) => {
+                const target = assets.find((a) => a.id === it.id);
+                const label = it.slug ?? it.id.slice(0, 8);
+                return (
+                  <li key={`${it.at}-${it.id}-${k}`} data-testid="activity-row" className="activity-row">
+                    <time dateTime={it.at} title={it.at} className="muted">
+                      {relativeTime(it.at)}
+                    </time>{" "}
+                    <span>{activityVerb(it.kind)}</span>{" "}
+                    {target ? (
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => {
+                          setSelected(target);
+                          setLoadError(null);
+                          setGltfClips([]);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ) : (
+                      <span className="activity-gone" title="no longer exists">
+                        {label}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {activity && activityLimit < 100 && activity.total > activity.items.length && (
+            <button type="button" className="tiny" data-testid="activity-more" onClick={() => setActivityLimit(100)}>
+              Show more
+            </button>
           )}
         </details>
         <button type="button" className="primary" onClick={() => setRegisterOpen((o) => !o)}>
