@@ -256,7 +256,8 @@ export const SceneNodeSchema = z.object({
   /** S3-A #33 — default true when omitted; false hides in compose, keeps in graph. */
   visible: z.boolean().optional(),
   /**
-   * S3-E #41 — soft-delete tombstone (absent = live; the API normalises `false` to absent).
+   * S3-E #41 — soft-delete tombstone (absent = live; the API normalises strict `false` to absent;
+   * S3-F NIT-E2-1: non-boolean values such as `"true"`, `1` or `null` are 400 VALIDATION, never coerced).
    * Tombstones keep id + transform, are hidden in the viewer, skipped by V4/V4a resolve and
    * excluded from the #38 node cap, but still block DELETE of the referenced asset.
    */

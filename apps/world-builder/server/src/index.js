@@ -217,14 +217,39 @@ function collection() {
   return db?.collection("assets") ?? null;
 }
 
-/** S3-E #41 — `deleted: false` (or any non-true) is normalised to absent before validation. */
+/**
+ * S3-E #41 — strict `deleted: false` is normalised to absent before validation.
+ * S3-F NIT-E2-1 — only the boolean `false` is stripped; any non-boolean (`"true"`, `1`, `null`, …) is left
+ * in place so the schema rejects it with 400 VALIDATION instead of silently reviving the node.
+ */
 function normaliseTombstones(scene) {
   if (!scene || !Array.isArray(scene.nodes)) return;
   for (const n of scene.nodes) {
-    if (n && typeof n === "object" && Object.prototype.hasOwnProperty.call(n, "deleted") && n.deleted !== true) {
+    if (n && typeof n === "object" && Object.prototype.hasOwnProperty.call(n, "deleted") && n.deleted === false) {
       delete n.deleted;
     }
   }
+}
+
+/**
+ * S3-F CO-1 (D2) — scene node flags `deleted` / `visible` must be JSON booleans when present.
+ * Returns a sent 400 VALIDATION `{field: "nodes[i].<flag>"}` (first offender) or null. Runs before
+ * the tombstone normaliser so a junk value can never be dropped and revive a node; the Zod schema
+ * (`z.boolean().optional()`) is the second line.
+ */
+function sendNodeFlagError(res, scene) {
+  if (!scene || typeof scene !== "object" || !Array.isArray(scene.nodes)) return null;
+  for (let i = 0; i < scene.nodes.length; i++) {
+    const n = scene.nodes[i];
+    if (!n || typeof n !== "object") continue;
+    for (const flag of ["deleted", "visible"]) {
+      if (Object.prototype.hasOwnProperty.call(n, flag) && typeof n[flag] !== "boolean") {
+        const field = `nodes[${i}].${flag}`;
+        return sendError(res, 400, "VALIDATION", `${field} must be a boolean (true or false)`, { field });
+      }
+    }
+  }
+  return null;
 }
 
 /** S3-E #38 — live-node cap (tombstones excluded, Leader ruling). Returns a sent response or null. */
@@ -486,6 +511,7 @@ app.post("/api/assets", async (req, res) => {
     }
 
     // S2-E: schema gates (scene stub, humanoid, formats, …)
+    if (sendNodeFlagError(res, body.scene)) return;
     normaliseTombstones(body.scene);
     const parsed = safeParseAsset(body);
     if (!parsed.success) return sendValidation(res, parsed);
@@ -659,6 +685,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     };
     if (clearAltText) delete next.altText;
 
+    if (sendNodeFlagError(res, next.scene)) return;
     normaliseTombstones(next.scene);
     const parsed = safeParseAsset(next);
     if (!parsed.success) return sendValidation(res, parsed);
