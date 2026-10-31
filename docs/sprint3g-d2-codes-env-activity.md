@@ -14,7 +14,7 @@
 Still exactly 6 `SKIP_*` codes. Schema stays 3. OpenAPI stays 0.7.0 (no routes added; #44 and #84 are client routes).
 
 ## New env
-`INBOX_TTL_HOURS` (1–8760, default 168), `WEBHOOK_URL`, `WEBHOOK_SECRET` (≥ 16 chars), `WEBHOOK_ALLOW_HTTP`, `WEBHOOK_ALLOW_PRIVATE` (test-only, documented as dangerous). All in `.env.example` and `docs/contract-changelog.md`.
+`INBOX_TTL_HOURS` (1–8760, default 168), `WEBHOOK_URL`, `WEBHOOK_SECRET` (≥ 16 chars), `WEBHOOK_ALLOW_HTTP`, `WEBHOOK_ALLOW_PRIVATE` (test-only, documented as dangerous), plus `VITE_PORT` (default 5173) and `WB_API_PORT` (default 8787) so the UI suite can run on non-default ports (approved deviation 1). All in `.env.example` and `docs/contract-changelog.md`.
 
 ## New activity kinds
 `inbox.sweep {removed, kept}` (only when removed > 0), `webhook.refused {reason}`, `webhook.failed`. No URL, IP, path or secret in any entry. Added to the #128 enum and the S3-F D1 activity row verbs ("Swept inbox", "Webhook refused", "Webhook failed").
@@ -26,4 +26,8 @@ Still exactly 6 `SKIP_*` codes. Schema stays 3. OpenAPI stays 0.7.0 (no routes a
 - **#72:** fire-and-forget after the response, 3 s timeout, one retry after 1 s; redirects refused, every A/AAAA vetted and the IP pinned; HMAC header `X-Webhook-Signature: sha256=<hex>`.
 - **#78:** sweep only `*.png` directly in the inbox, no symlinks, referenced files kept.
 - **#36/#29:** client-only until Save; batches are one undo step; save marker drives the dirty indicator.
+- **CI UI job:** root devDependency `playwright-core` drives the runner's own Chrome; no browser download step (deviation 2). The #148 test expects an S3-G section (deviation 3).
+- **CO-5:** `ci.yml` gains a `push` trigger on `enhancement/**` (E3). A pack PR then runs both push and pull_request; both must be green.
+- **#150:** mermaid lint uses pinned `mermaid` `parse()` under `jsdom` (offline, parse-only), since `@mermaid-js/parser` rejects flowcharts; devDependencies only, no network; covers every tracked `*.md` in the repo (Leader ruling), including the 6 existing blocks, `docs/pipeline.md`, `AGENTS.md` and any root docs.
+- **CO-1 follow-up:** lane tags may be followed by `-` (`e1b-thing` maps to E1).
 - **FULL PASS gate:** the tip's live CI run is green (pack pushes need `workflow_dispatch` until triggers cover `enhancement/**`).
