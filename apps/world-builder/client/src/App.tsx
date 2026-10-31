@@ -2,7 +2,7 @@
  * S2-F-E2 / S2-G-E2 — World-builder viewer: clip UX + importMeta + scene compose/author.
  * Compose stage=scene children by transform + defaultClip; author CRUD; no demo fallback.
  */
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -773,6 +773,18 @@ function normalizeSceneSnapshot(
   });
 }
 
+/** S3-G CO-4 — reports the first rendered frame for `k` (the selection whose scene JSON was applied). */
+function FirstFrame({ k, onFrame }: { k: string | null; onFrame: (k: string) => void }) {
+  const done = useRef<string | null>(null);
+  useFrame(() => {
+    if (k && done.current !== k) {
+      done.current = k;
+      onFrame(k);
+    }
+  });
+  return null;
+}
+
 export function App() {
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [selected, setSelected] = useState<AssetMeta | null>(null);
@@ -818,6 +830,9 @@ export function App() {
   const [clipUx, setClipUx] = useState<ClipUx>({});
   const [sceneNodeId, setSceneNodeId] = useState<string | null>(null);
   const [sceneDraft, setSceneDraft] = useState<SceneNodeDraft[]>([]);
+  // S3-G CO-4 — data-scene-ready: scene JSON applied for this selection AND a frame rendered after it
+  const [sceneAppliedFor, setSceneAppliedFor] = useState<string | null>(null);
+  const [sceneFramedFor, setSceneFramedFor] = useState<string | null>(null);
   const [sceneRootId, setSceneRootId] = useState<string | undefined>(undefined);
   const [sceneSaveError, setSceneSaveError] = useState<string | null>(null);
   const [sceneSaving, setSceneSaving] = useState(false);
@@ -1268,6 +1283,7 @@ export function App() {
       setSceneNodeId(null);
       setSceneSaveError(null);
     }
+    setSceneAppliedFor(selected?.id ?? null);
   }, [selected?.id, selected?.clipUx, selected?.stage, selected?.scene]);
 
   useEffect(() => {
@@ -2028,7 +2044,12 @@ export function App() {
           </div>
         )}
       </aside>
-      <div className="viewer" ref={viewerShellRef}>
+      <div
+        className="viewer"
+        ref={viewerShellRef}
+        data-testid="viewer-root"
+        data-scene-ready={selected && sceneAppliedFor === selected.id && sceneFramedFor === selected.id ? "1" : "0"}
+      >
         <div className="viewer-header">
           <div className="asset-title">
             {selected ? (
@@ -2235,6 +2256,7 @@ export function App() {
           shadows={viewDraft.shadows}
           gl={{ alpha: false }}
         >
+          <FirstFrame k={selected && sceneAppliedFor === selected.id ? selected.id : null} onFrame={setSceneFramedFor} />
           <color attach="background" args={[canvasTheme.clear]} />
           <ambientLight intensity={0.65} />
           <directionalLight
