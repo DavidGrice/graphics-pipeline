@@ -16,6 +16,7 @@ const SKIP_DIR = new Set(["node_modules", "dist", "build", ".vite", "__pycache__
  * Kept explicit so a new code-looking literal must be documented or consciously listed here.
  */
 export const NON_CODES = new Set([
+  "ACTIONLINT_BIN",
   "ARMATURE_NAME",
   "CORS_ORIGINS",
   "KRITA_FP_DEBUG",
@@ -24,6 +25,7 @@ export const NON_CODES = new Set([
   "MAX_GLB_MB",
   "RATE_LIMIT_PER_MIN",
   "SCENE_MAX_NODES",
+  "SHELLCHECK_BIN",
   "SMOKE_MODE",
   "TRUST_PROXY",
 ]);

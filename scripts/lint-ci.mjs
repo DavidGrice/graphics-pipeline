@@ -5,16 +5,26 @@
  *
  *   exit 0  clean (a missing tool prints `SKIP_PLATFORM: <tool> not on PATH` and is skipped)
  *   exit 1  ERROR LINT_FAILED: <tool> — the tool's own findings are printed above the line
- * ACTIONLINT_BIN / SHELLCHECK_BIN override PATH lookup.
+ *   exit 2  ERROR CONFIG_INVALID: ACTIONLINT_BIN / SHELLCHECK_BIN is set but missing, not a file or not
+ *           executable (S3-F CO-2; names the variable, never the path; checked before anything runs)
+ * ACTIONLINT_BIN / SHELLCHECK_BIN override PATH lookup; unset + not on PATH → SKIP_PLATFORM.
  */
 import { spawnSync } from "node:child_process";
-import { resolveTool } from "./tool-bin.mjs";
+import { overrideProblem, resolveTool } from "./tool-bin.mjs";
+
+for (const v of ["ACTIONLINT_BIN", "SHELLCHECK_BIN"]) {
+  const why = overrideProblem(process.env[v] || "");
+  if (why) {
+    console.error(`ERROR CONFIG_INVALID: ${v} ${why}`);
+    process.exit(2);
+  }
+}
 
 const cwd = process.cwd();
 let failed = 0;
 
 function run(tool, override, args) {
-  const bin = resolveTool(tool, override);
+  const bin = resolveTool(tool, override || undefined);
   if (!bin) {
     console.log(`SKIP_PLATFORM: ${tool} not on PATH (install it or set ${tool.toUpperCase()}_BIN); ${tool} skipped`);
     return;
@@ -30,7 +40,7 @@ function run(tool, override, args) {
   }
 }
 
-const shellcheck = resolveTool("shellcheck", process.env.SHELLCHECK_BIN);
+const shellcheck = resolveTool("shellcheck", process.env.SHELLCHECK_BIN || undefined);
 // actionlint also shellchecks `run:` blocks when shellcheck is resolvable
 run("actionlint", process.env.ACTIONLINT_BIN, shellcheck ? ["-shellcheck", shellcheck] : ["-shellcheck="]);
 
