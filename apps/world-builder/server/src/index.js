@@ -18,6 +18,8 @@ import {
   liveSceneNodes,
   clipRequiresProblem,
 } from "@graphics-pipeline/asset-schema";
+import { parseInboxTtlHours, sweepInbox, referencedInboxNames, INBOX_SWEEP_INTERVAL_MS } from "./inboxSweep.js";
+import { parseWebhookConfig, createWebhook } from "./webhook.js";
 import { createActivityLog, parseActivityLimit, parseActivityMaxLines } from "./activity.js";
 import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
 import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
@@ -136,6 +138,8 @@ let SCENE_MAX_NODES;
 let ACTIVITY_MAX_LINES;
 let BRIDGE_MODE;
 let PUBLIC_BASE_URL;
+let INBOX_TTL_HOURS;
+let WEBHOOK_CONFIG;
 try {
   try {
     MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
@@ -152,6 +156,10 @@ try {
   BRIDGE_MODE = parseBridgeMode(process.env.BRIDGE);
   // S3-F #85 — share QR base (absolute http(s) origin) or null
   PUBLIC_BASE_URL = parsePublicBaseUrl(process.env.PUBLIC_BASE_URL);
+  // S3-G #78 — inbox PNG TTL hours (1..8760, default 168)
+  INBOX_TTL_HOURS = parseInboxTtlHours(process.env.INBOX_TTL_HOURS);
+  // S3-G #72 — webhook (off unless WEBHOOK_URL); bad values name the variable only
+  WEBHOOK_CONFIG = parseWebhookConfig(process.env);
 } catch (err) {
   console.error(`[world-builder] FATAL ${err instanceof ConfigError ? err.message : "CONFIG_INVALID: startup config"}`);
   process.exit(1);
@@ -159,6 +167,12 @@ try {
 const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
 // S3-F #128 — append-only activity log under DATA_ROOT (gitignored); write failures never fail a request.
 const activity = createActivityLog({ dataRoot: DATA_ROOT, maxLines: ACTIVITY_MAX_LINES });
+// S3-G #72 — fire-and-forget webhook; never fails a request, never logs URL/IP/secret.
+const webhook = createWebhook(WEBHOOK_CONFIG, { activity });
+if (process.env.WEBHOOK_ALLOW_PRIVATE === "1") {
+  // Leader condition: test-only flag — loud at start, never echoes URL/secret.
+  console.warn("[world-builder] WARNING WEBHOOK_ALLOW_PRIVATE=1 is TEST-ONLY and DANGEROUS: webhook address-range (SSRF) check disabled");
+}
 // S3-F #140 — featured scene playlist (<DATA_ROOT>/featured.json, gitignored).
 const featured = createFeaturedStore({ dataRoot: DATA_ROOT });
 
@@ -648,6 +662,7 @@ app.post("/api/assets", async (req, res) => {
     const importHeader = String(req.get("x-activity-kind") || "").toLowerCase() === "pack.import";
     void activity.record(importHeader ? "pack.import" : body.stage === "scene" ? "scene.save" : "asset.register", body);
     res.status(201).json(body);
+    if (body.stage !== "scene") setImmediate(() => void webhook.emit("asset.register", body)); // S3-G #72, after the response
   } catch (err) {
     sendInternal(req, res, err);
   }
@@ -902,6 +917,7 @@ app.delete("/api/assets/:id", async (req, res) => {
     else memoryAssets.delete(id);
     void activity.record("asset.delete", existing);
     res.status(204).end();
+    setImmediate(() => void webhook.emit("asset.delete", existing)); // S3-G #72, after the response
   } catch (err) {
     sendInternal(req, res, err);
   }
@@ -989,6 +1005,21 @@ app.use((err, req, res, _next) => sendInternal(req, res, err));
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 await connectMongo();
+
+// S3-G #78 — inbox sweep at start, then hourly (unref). The file sweep is the source of truth.
+async function runInboxSweep() {
+  try {
+    const col = collection();
+    const docs = col ? await col.find({}, { projection: { importMeta: 1, formats: 1 } }).toArray() : [...memoryAssets.values()];
+    const r = sweepInbox({ inboxRoot: INBOX_ROOT, ttlHours: INBOX_TTL_HOURS, referenced: referencedInboxNames(docs) });
+    if (r.removed > 0) void activity.record("inbox.sweep", r);
+  } catch (err) {
+    console.warn(`[world-builder] inbox sweep failed (${err && err.code ? err.code : "error"})`);
+  }
+}
+await runInboxSweep();
+setInterval(() => void runInboxSweep(), INBOX_SWEEP_INTERVAL_MS).unref();
+
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB} RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN} SCENE_MAX_NODES=${SCENE_MAX_NODES} CORS_ORIGINS=${CORS_ORIGINS.length})`);
 });
