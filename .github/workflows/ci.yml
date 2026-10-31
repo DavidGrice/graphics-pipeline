@@ -4,7 +4,10 @@ on:
   pull_request:
     branches: [dev, test, main]
   push:
-    branches: [dev, test, main]
+    # S3-G CO-5: pack pushes run live CI (no more workflow_dispatch gate). A PR from an enhancement/**
+    # branch also gets a pull_request run on the same SHA — two runs, by design (different refs, so the
+    # concurrency group does not cancel either); both must be green.
+    branches: [dev, test, main, "enhancement/**"]
   workflow_dispatch:
 
 permissions:
