@@ -4,23 +4,34 @@
  * as argv[2]) with the repo's .gitleaks.toml (default rules; only tests/fixtures/** allowlisted).
  *
  *   exit 0  no findings
- *   exit 0  SKIP_PLATFORM: gitleaks not on PATH (or GITLEAKS_BIN not executable)
+ *   exit 0  SKIP_PLATFORM: GITLEAKS_BIN unset and no gitleaks on PATH (the only skip)
  *   exit 1  ERROR SECRETS_FOUND: <n> finding(s) — one line per finding: rule, file:line, short commit.
  *           Secrets are redacted by gitleaks and never echoed here.
- *   exit 2  ERROR SECRETS_SCAN_FAILED: gitleaks itself failed (bad config, not a git repo, …)
+ *   exit 2  ERROR SECRETS_SCAN_FAILED: gitleaks itself failed (bad config, not a git repo, …), or
+ *           GITLEAKS_BIN is set but missing / not an executable file (S3-F: an explicit path is never
+ *           silently skipped). An empty GITLEAKS_BIN counts as unset.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveTool } from "./tool-bin.mjs";
+import { overrideProblem, resolveTool } from "./tool-bin.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG = path.join(REPO, ".gitleaks.toml");
 const target = path.resolve(process.argv[2] || process.cwd());
 
-const bin = resolveTool("gitleaks", process.env.GITLEAKS_BIN);
+const override = process.env.GITLEAKS_BIN || "";
+{
+  // S3-F CO-2: an explicit GITLEAKS_BIN is never silently skipped; value never echoed
+  const why = overrideProblem(override);
+  if (why) {
+    console.error(`ERROR SECRETS_SCAN_FAILED: GITLEAKS_BIN ${why}`);
+    process.exit(2);
+  }
+}
+const bin = resolveTool("gitleaks", override || undefined);
 if (!bin) {
   console.log("SKIP_PLATFORM: gitleaks not on PATH (install gitleaks >= 8.19 or set GITLEAKS_BIN); secret scan skipped");
   process.exit(0);
