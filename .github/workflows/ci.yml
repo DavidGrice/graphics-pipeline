@@ -73,6 +73,44 @@ jobs:
           fi
           echo "OK: no tracked data/** media binaries"
 
+  # S3-G CO-4 (R1 ruling b) — browser UI suite twice on Node 24 only; a test that passes once and fails
+  # once fails the job (no quarantine). Hermetic stack on 8788/5174 with a throwaway data root.
+  ui-repeat:
+    name: ui-repeat (Node 24, 2 runs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build asset schema
+        run: npm run build:schema --if-present
+      - name: Start API (8788) + Vite (5174)
+        run: |
+          set -euo pipefail
+          data="${RUNNER_TEMP}/wb-data"
+          mkdir -p "${data}"
+          PORT=8788 WB_DATA_ROOT="${data}" RATE_LIMIT_PER_MIN=100000 KRITA_HEALTH_MODE=off MONGO_URI=mongodb://127.0.0.1:1 \
+            nohup node apps/world-builder/server/src/index.js > "${RUNNER_TEMP}/api.log" 2>&1 &
+          (cd apps/world-builder/client && VITE_PORT=5174 WB_API_PORT=8788 nohup npx vite > "${RUNNER_TEMP}/vite.log" 2>&1 &)
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8788/api/health >/dev/null && curl -fsS http://localhost:5174/ >/dev/null; then
+              echo "stack up"; exit 0
+            fi
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/api.log" "${RUNNER_TEMP}/vite.log"
+          exit 1
+      - name: UI suite x2 (npm run test:ui:repeat -- 2)
+        env:
+          UI_URL: http://localhost:5174/
+          WORLD_API: http://127.0.0.1:8788
+          CHROME_BIN: /usr/bin/google-chrome
+        run: npm run test:ui:repeat -- 2
+
   # S3-E #144 gitleaks (full history) + #107 actionlint/shellcheck. Tools are pinned and checksum-verified;
   # the npm scripts print SKIP_PLATFORM only where a tool is absent (local dev), never here.
   lint-secrets:
