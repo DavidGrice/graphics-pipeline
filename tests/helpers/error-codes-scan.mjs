@@ -31,6 +31,12 @@ export const NON_CODES = new Set([
   "SHELLCHECK_BIN",
   "SMOKE_MODE",
   "TRUST_PROXY",
+  // S3-G #78 / #72 env vars (named by CONFIG_INVALID), not error codes
+  "INBOX_TTL_HOURS",
+  "WEBHOOK_ALLOW_HTTP",
+  "WEBHOOK_ALLOW_PRIVATE",
+  "WEBHOOK_SECRET",
+  "WEBHOOK_URL",
 ]);
 
 const UPPER = "[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+";
