@@ -17,6 +17,8 @@ const SKIP_DIR = new Set(["node_modules", "dist", "build", ".vite", "__pycache__
  */
 export const NON_CODES = new Set([
   "ACTIONLINT_BIN",
+  "ACTIVITY_MAX_LINES",
+  "GLTF_SEPARATE", // Blender export_format constant (png_to_glb.py #110), not an error code
   "ARMATURE_NAME",
   "CORS_ORIGINS",
   "KRITA_FP_DEBUG",

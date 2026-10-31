@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.6.0
+  version: 0.7.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
@@ -19,6 +19,10 @@ info:
     capped by SCENE_MAX_NODES (default 256) -> 400 SCENE_NODES_MAX {max,count}; tombstoning the root ->
     400 SCENE_ROOT_DELETE; no live nodes left -> 400 SCENE_NO_LIVE_NODES. GET /api/health adds
     limits.sceneMaxNodes.
+    S3-F 0.7.0: scene node `deleted` / `visible` must be JSON booleans (else 400 VALIDATION
+    {field: "nodes[i].<flag>"}). GET /api/activity (append-only feed). /api/health gains
+    bridge {mode, status[, httpStatus]} (BRIDGE vendor|firstparty|mock, else CONFIG_INVALID at start);
+    401/403 from the bridge is "unauthorized" -> strict 503 KRITA_UNAUTHORIZED (down -> KRITA_DOWN).
 servers:
   - url: http://127.0.0.1:8787
     description: Local world-builder
@@ -30,7 +34,22 @@ paths:
         "200":
           description: OK
         "503":
-          description: Strict Krita down
+          description: Strict Krita check failed - KRITA_DOWN (bridge down) or KRITA_UNAUTHORIZED (bridge 401/403)
+  /api/activity:
+    get:
+      summary: Activity feed (S3-F #128) - newest first, not rate-limited
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: |
+            {items: [{at, kind, id, slug?}], total}. kind is one of asset.register, asset.patch,
+            asset.delete, scene.save, scene.purge, pack.import. Reads activity.jsonl, then the one
+            rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
+        "400":
+          description: 'VALIDATION {field: "limit"} (not an integer 1..100)'
   /api/assets:
     get:
       summary: List/search assets
