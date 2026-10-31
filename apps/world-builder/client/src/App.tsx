@@ -27,6 +27,7 @@ import {
   resolveReducedMotion,
   resolveTheme,
   shouldAutoplay,
+  sortNewestFirst,
   warningsCount,
   type MotionPref,
   type SlugClash,
@@ -3371,7 +3372,9 @@ export function App() {
                               onChange={(e) => setReplaceQuery(e.target.value)}
                             />
                             <ul className="replace-results">
-                              {assets
+                              {/* NIT-G-2 — newest first (ties: most recently stored first) so the cap of 30
+                                  never hides a just-registered asset on a populated store */}
+                              {sortNewestFirst([...assets].reverse())
                                 .filter((a) => a.id !== n.assetId && a.slug !== n.assetId)
                                 .filter((a) => {
                                   const q = replaceQuery.trim().toLowerCase();

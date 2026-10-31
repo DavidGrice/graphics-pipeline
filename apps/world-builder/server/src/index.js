@@ -513,7 +513,10 @@ app.get("/api/assets", async (req, res) => {
         .map((d, i) => ({ d, i, t: ts(d) }))
         .sort((a, b) => {
           if (a.t == null || b.t == null) return (a.t == null) - (b.t == null) || a.i - b.i;
-          return (a.t - b.t) * dir || a.i - b.i;
+          // NIT-G-2 — equal createdAt: "-createdAt" puts the most recently stored asset first (it is the
+          // newest import); ascending keeps store order. Before, ties always kept store order, so on a
+          // populated store a just-registered asset sharing a timestamp fell past the limit.
+          return (a.t - b.t) * dir || (dir < 0 ? b.i - a.i : a.i - b.i);
         })
         .map((x) => x.d);
     }

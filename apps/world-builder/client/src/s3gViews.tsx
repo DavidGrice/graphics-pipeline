@@ -95,12 +95,19 @@ function CompareModel({ url, onStats }: { url: string; onStats: (s: Stats) => vo
   return <primitive object={clone} />;
 }
 
-class ViewBoundary extends Component<{ children: ReactNode }, { err: string | null }> {
+// NIT-G-2 — inside an R3F <Canvas> a DOM fallback (<p>) is not a THREE object and throws again
+// ("P is not part of the THREE namespace"); with onError the boundary renders nothing there and the
+// caller shows the message in the DOM outside the Canvas.
+class ViewBoundary extends Component<{ children: ReactNode; onError?: (msg: string) => void }, { err: string | null }> {
   state = { err: null as string | null };
   static getDerivedStateFromError(e: unknown) {
     return { err: String((e as Error)?.message ?? e).replace(/\/(home|workspace|tmp|etc|usr|var)\/\S*/g, "…") };
   }
+  componentDidCatch() {
+    if (this.state.err) this.props.onError?.(this.state.err);
+  }
   render() {
+    if (this.state.err && this.props.onError) return null;
     return this.state.err ? <p className="err" role="alert">Viewer error: {this.state.err}</p> : this.props.children;
   }
 }
@@ -123,6 +130,7 @@ function CompareViewport({
   const url = asset.formats?.glb ? `/api/assets/${asset.id}/file` : null;
   const ctl = useRef<any>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   useEffect(() => {
     shared.current[side] = ctl;
     return () => {
@@ -160,12 +168,13 @@ function CompareViewport({
           <directionalLight position={[3, 5, 2]} intensity={1.1} />
           <Grid infiniteGrid fadeDistance={20} />
           <OrbitControls ref={ctl} makeDefault onChange={onChange} />
-          <ViewBoundary>
+          <ViewBoundary key={url ?? "none"} onError={setLoadErr}>
             <Suspense fallback={null}>{url ? <CompareModel url={url} onStats={onStats} /> : null}</Suspense>
           </ViewBoundary>
         </Canvas>
         </ViewBoundary>
         {!url ? <p className="muted compare-nomesh">No GLB for this asset</p> : null}
+        {url && loadErr ? <p className="err compare-nomesh" role="alert" data-testid="compare-load-error">Viewer error: {loadErr}</p> : null}
       </div>
     </div>
   );
