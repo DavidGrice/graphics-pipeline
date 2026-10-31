@@ -114,12 +114,14 @@ const SAMPLE = {
   "198.18.0.0/15": "198.19.0.1",
   "224.0.0.0/4": "239.1.1.1",
   "240.0.0.0/4": "250.0.0.1",
-  "::/128": "::",
+  "::/96": "::",
   "::1/128": "::1",
   "fc00::/7": "fd12::1",
   "fe80::/10": "fe80::1",
   "::ffff:0:0/96": "::ffff:8.8.8.8",
   "64:ff9b::/96": "64:ff9b::808:808",
+  "ff00::/8": "ff02::1",
+  "2002::/16": "2002:808:808::1",
 };
 test("#72 every R1 range has a sample (table complete)", () => {
   const ranges = [...BLOCKED_V4, ...BLOCKED_V6].map(([a, p]) => `${a}/${p}`);
@@ -132,6 +134,22 @@ for (const [range, ip] of Object.entries(SAMPLE)) {
     assert.deepEqual(v, { refused: "blocked_address" });
   });
 }
+test("#72 IPv6 hardening: ::/96 (IPv4-compatible), ff00::/8 multicast, 2002::/16 6to4 each refused via the fake resolver", async () => {
+  for (const ip of ["::7f00:1", "::a00:1", "::0.0.0.1"]) {
+    assert.equal(isBlockedIp(ip), true, `::/96 ${ip}`);
+    assert.deepEqual(await vetHost("c.example", { resolve: async () => [ip] }), { refused: "blocked_address" });
+  }
+  for (const ip of ["ff02::1", "ff05::2", "ff0e::101"]) {
+    assert.equal(isBlockedIp(ip), true, `ff00::/8 ${ip}`);
+    assert.deepEqual(await vetHost("m6.example", { resolve: async () => [ip] }), { refused: "blocked_address" });
+  }
+  for (const ip of ["2002:7f00:1::1", "2002:808:808::1", "2002::"]) {
+    assert.equal(isBlockedIp(ip), true, `2002::/16 ${ip}`);
+    assert.deepEqual(await vetHost("t4.example", { resolve: async () => [ip] }), { refused: "blocked_address" });
+  }
+  assert.equal(isBlockedIp("2001:db8::1"), false, "neighbouring public-format range still passes");
+  assert.equal(isBlockedIp("2003::1"), false);
+});
 test("#72 public addresses pass; mixed public + private records are refused", async () => {
   assert.equal(isBlockedIp("8.8.8.8"), false);
   assert.equal(isBlockedIp("2606:4700::1111"), false);

@@ -24,7 +24,9 @@ export const BLOCKED_V4 = Object.freeze([
   ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4],
 ]);
 export const BLOCKED_V6 = Object.freeze([
-  ["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["::ffff:0:0", 96], ["64:ff9b::", 96],
+  // ::/96 = unspecified + IPv4-compatible; ff00::/8 multicast; 2002::/16 6to4 blocked wholesale
+  ["::", 96], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["::ffff:0:0", 96], ["64:ff9b::", 96],
+  ["ff00::", 8], ["2002::", 16],
 ]);
 
 const v4List = new net.BlockList();
