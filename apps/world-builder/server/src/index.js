@@ -2,7 +2,6 @@
  * Express API stub — Mongo metadata + local disk for GLB/preview.
  * Sprint 1 surface from Designer contract.
  */
-import cors from "cors";
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +14,8 @@ import {
   maxGlbBytes,
   ALT_TEXT_MAX,
   suggestSlug,
+  SCENE_MAX_NODES_DEFAULT,
+  liveSceneNodes,
 } from "@graphics-pipeline/asset-schema";
 
 /**
@@ -35,6 +36,15 @@ function normaliseAltText(raw) {
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
 import { sendError, sendInternal, sendValidation } from "./errors.js";
+import {
+  ConfigError,
+  corsAllowlist,
+  parseCorsOrigins,
+  parseRateLimitPerMin,
+  parseSceneMaxNodes,
+  parseTrustProxy,
+  rateLimiter,
+} from "./security.js";
 import {
   resolveUnder,
   PathGuardError,
@@ -113,11 +123,24 @@ const ASSETS_DIR = path.join(DATA_ROOT, "assets");
 const INBOX_ROOT = path.join(DATA_ROOT, "inbox");
 
 // S3-D #76 — MAX_GLB_MB (default 100, integer ≥ 1). Invalid → refuse to start (fail-closed).
+// S3-E: every fail-closed start error is CONFIG_INVALID and names the variable, never its value.
 let MAX_GLB_MB;
+let RATE_LIMIT_PER_MIN;
+let CORS_ORIGINS;
+let TRUST_PROXY;
+let SCENE_MAX_NODES;
 try {
-  MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  try {
+    MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
+  } catch {
+    throw new ConfigError("MAX_GLB_MB", "must be an integer >= 1");
+  }
+  RATE_LIMIT_PER_MIN = parseRateLimitPerMin(process.env.RATE_LIMIT_PER_MIN);
+  CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGINS);
+  TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
+  SCENE_MAX_NODES = parseSceneMaxNodes(process.env.SCENE_MAX_NODES, SCENE_MAX_NODES_DEFAULT);
 } catch (err) {
-  console.error(`[world-builder] FATAL ${err.message}`);
+  console.error(`[world-builder] FATAL ${err instanceof ConfigError ? err.message : "CONFIG_INVALID: startup config"}`);
   process.exit(1);
 }
 const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
@@ -194,8 +217,35 @@ function collection() {
   return db?.collection("assets") ?? null;
 }
 
+/** S3-E #41 — `deleted: false` (or any non-true) is normalised to absent before validation. */
+function normaliseTombstones(scene) {
+  if (!scene || !Array.isArray(scene.nodes)) return;
+  for (const n of scene.nodes) {
+    if (n && typeof n === "object" && Object.prototype.hasOwnProperty.call(n, "deleted") && n.deleted !== true) {
+      delete n.deleted;
+    }
+  }
+}
+
+/** S3-E #38 — live-node cap (tombstones excluded, Leader ruling). Returns a sent response or null. */
+function sendSceneCapError(res, scene) {
+  if (!scene || !Array.isArray(scene.nodes)) return null;
+  const count = liveSceneNodes(scene.nodes).length;
+  if (count <= SCENE_MAX_NODES) return null;
+  return sendError(
+    res,
+    400,
+    "SCENE_NODES_MAX",
+    `scene has ${count} live nodes; max is ${SCENE_MAX_NODES} (SCENE_MAX_NODES)`,
+    { max: SCENE_MAX_NODES, count },
+  );
+}
+
 const app = express();
-app.use(cors({ origin: true }));
+// S3-E #145 — exact-origin allowlist (was cors({origin:true}) = reflect any Origin).
+app.use(corsAllowlist(CORS_ORIGINS));
+// S3-E #139 — token bucket on mutating /api routes; GET/HEAD/OPTIONS never throttled.
+app.use(rateLimiter({ perMin: RATE_LIMIT_PER_MIN, trustProxy: TRUST_PROXY }));
 app.use(express.json({ limit: "2mb" }));
 // S3-D R1 §0 — body-parser failures use the same envelope (no HTML error pages).
 app.use((err, _req, res, next) => {
@@ -271,6 +321,8 @@ app.get("/api/health", async (_req, res) => {
     krita,
     tools: safeTools,
     blender: tools.blender?.version ?? null,
+    // S3-E #38 — the scene author reads its "Nodes n / max" cap from here.
+    limits: { sceneMaxNodes: SCENE_MAX_NODES },
     ...(ok ? { dataRoot: DATA_ROOT } : {}),
     strictKrita: strict,
     ...(bridgeMode === "mock" ? { bridge: "mock" } : {}),
@@ -434,8 +486,10 @@ app.post("/api/assets", async (req, res) => {
     }
 
     // S2-E: schema gates (scene stub, humanoid, formats, …)
+    normaliseTombstones(body.scene);
     const parsed = safeParseAsset(body);
     if (!parsed.success) return sendValidation(res, parsed);
+    if (sendSceneCapError(res, body.scene)) return;
 
     const col = collection();
     // S3-D #127 — a slug owned by a different id → 409 SLUG_CLASH (same id re-register is idempotent)
@@ -605,8 +659,10 @@ app.patch("/api/assets/:id", async (req, res) => {
     };
     if (clearAltText) delete next.altText;
 
+    normaliseTombstones(next.scene);
     const parsed = safeParseAsset(next);
     if (!parsed.success) return sendValidation(res, parsed);
+    if (sendSceneCapError(res, next.scene)) return;
 
     if (next.stage === "scene" && next.scene?.nodes) {
       const resolveDoc = async (idOrSlug) => {
@@ -711,19 +767,25 @@ app.delete("/api/assets/:id", async (req, res) => {
     const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
     if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
     const all = col ? await col.find({ stage: "scene" }).toArray() : [...memoryAssets.values()];
-    const refs = all
+    // S3-E #41 (R1 §6) — tombstoned references still block (restore must not dangle).
+    const hits = all
       .filter((d) => d.stage === "scene" && d.id !== id)
-      .filter((d) =>
-        (d.scene?.nodes ?? []).some((n) => n.assetId === id || n.assetId === existing.slug),
-      )
-      .map((d) => d.id);
+      .map((d) => {
+        const using = (d.scene?.nodes ?? []).filter((n) => n.assetId === id || n.assetId === existing.slug);
+        return { id: d.id, live: using.some((n) => n.deleted !== true), any: using.length > 0 };
+      })
+      .filter((h) => h.any);
+    const refs = hits.map((h) => h.id);
     if (refs.length) {
+      const deletedRefs = hits.filter((h) => !h.live).map((h) => h.id);
       return sendError(
         res,
         409,
         "ASSET_IN_USE",
-        `asset referenced by scene(s): ${refs.join(", ")}`,
-        { refs },
+        deletedRefs.length === refs.length
+          ? `asset referenced only by deleted nodes in scene(s): ${refs.join(", ")}; purge them to free it`
+          : `asset referenced by scene(s): ${refs.join(", ")}`,
+        { refs, deletedRefs },
       );
     }
     if (col) await col.deleteOne({ id });
@@ -817,5 +879,5 @@ fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 await connectMongo();
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB})`);
+  console.log(`[world-builder] http://127.0.0.1:${PORT} (MAX_GLB_MB=${MAX_GLB_MB} RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN} SCENE_MAX_NODES=${SCENE_MAX_NODES} CORS_ORIGINS=${CORS_ORIGINS.length})`);
 });

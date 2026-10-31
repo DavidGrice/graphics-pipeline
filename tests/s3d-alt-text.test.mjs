@@ -100,7 +100,8 @@ test("#88 static wiring: Canvas inside role=img wrapper; counter + disabled Save
   assert.ok(app.indexOf("<Canvas", w) > w && app.indexOf("<Canvas", w) < app.indexOf("</Canvas>", w));
   assert.match(app, /Alt text \(optional\)/);
   assert.match(app, /data-testid="alt-text-counter"/);
-  assert.match(app, /disabled=\{altSaving \|\| st\.over \|\| !dirty\}/);
+  // S3-E #139 adds the 429 cooldown to the same expression
+  assert.match(app, /disabled=\{altSaving \|\| st\.over \|\| !dirty \|\| rlLeft > 0\}/);
 });
 
 test("#88 browser: counter turns error at 281 + Save disabled; saved alt text becomes the canvas label", async (t) => {

@@ -168,6 +168,8 @@ export async function startApi(env = {}) {
       WB_DATA_ROOT: dataRoot,
       MONGO_URI: "mongodb://127.0.0.1:1",
       KRITA_HEALTH_MODE: "off",
+      // S3-E #139 — hermetic APIs are not throttled unless a test sets its own low limit
+      RATE_LIMIT_PER_MIN: "100000",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],

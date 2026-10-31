@@ -194,6 +194,21 @@ export function maxGlbBytes(mb: number): number {
   return mb * 1024 * 1024;
 }
 
+const timingMs = z.number().int().min(0).max(86_400_000);
+/**
+ * S3-E #66 — fixed key set; `total` = export + probe + copy (register is in timings.json only,
+ * it is not known until the POST returns). `probeCache` feeds the #94 history-row tooltip.
+ */
+export const ImportTimingsSchema = z
+  .object({
+    export: timingMs.optional(),
+    probe: timingMs,
+    copy: timingMs,
+    total: timingMs,
+    probeCache: z.enum(["hit", "miss", "off"]),
+  })
+  .strict();
+
 export const ImportMetaSchema = z.object({
   source: z.enum(["mixamo", "fbx", "png_pipeline", "unknown"]),
   warnings: z.array(ImportWarningSchema).max(50).optional(),
@@ -202,6 +217,9 @@ export const ImportMetaSchema = z.object({
   boneMapStub: z.string().optional(),
   characterTypeHint: z.enum(["humanoid", "prop", "unknown"]).optional(),
   humanoidPngApproved: z.boolean().optional(),
+  // S3-E #66 — optional mirror of timings.json (integer ms; additive, schema version stays 3).
+  // Written by register_asset.mjs only when importMeta already exists; never in goldens.
+  timingsMs: ImportTimingsSchema.optional(),
 });
 
 /**
@@ -237,7 +255,20 @@ export const SceneNodeSchema = z.object({
   defaultClip: z.string().optional(),
   /** S3-A #33 — default true when omitted; false hides in compose, keeps in graph. */
   visible: z.boolean().optional(),
+  /**
+   * S3-E #41 — soft-delete tombstone (absent = live; the API normalises `false` to absent).
+   * Tombstones keep id + transform, are hidden in the viewer, skipped by V4/V4a resolve and
+   * excluded from the #38 node cap, but still block DELETE of the referenced asset.
+   */
+  deleted: z.boolean().optional(),
 });
+
+/** S3-E #38 — default live-node cap (API env SCENE_MAX_NODES overrides). */
+export const SCENE_MAX_NODES_DEFAULT = 256;
+/** S3-E #41 — live (non-tombstoned) nodes. */
+export function liveSceneNodes<T extends { deleted?: boolean }>(nodes: readonly T[]): T[] {
+  return nodes.filter((n) => n.deleted !== true);
+}
 
 /** S3-C #31 — scene-level view prefs (default ground on, shadows off). */
 export const SceneViewSchema = z
@@ -304,6 +335,21 @@ export const SceneGraphSchema = z
         code: z.ZodIssueCode.custom,
         path: ["rootId"],
         message: `rootId "${scene.rootId}" not in nodes[].id`,
+      });
+    }
+    // S3-E #41 (R1 §6) — the root can't be tombstoned; at least one live node must remain.
+    if (scene.rootId && scene.nodes.some((n) => n.id === scene.rootId && n.deleted === true)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rootId"],
+        message: `SCENE_ROOT_DELETE: root node "${scene.rootId}" can't be deleted (set another root first)`,
+      });
+    }
+    if (scene.nodes.length > 0 && scene.nodes.every((n) => n.deleted === true)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["nodes"],
+        message: "SCENE_NO_LIVE_NODES: a scene needs at least one live (not deleted) node",
       });
     }
   });

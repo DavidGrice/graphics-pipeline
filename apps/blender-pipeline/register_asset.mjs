@@ -5,13 +5,16 @@
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
  *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
- * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
+ * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB or PROBE_CACHE (CONFIG_INVALID) · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { probeGlb, assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
+import { performance } from "node:perf_hooks";
+import { assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
+import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
+import { buildTimings, readExportMs, writeTimings } from "./timings.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
 import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
 
@@ -124,6 +127,13 @@ if (importMetaPath) {
 }
 
 // S3-D #76 — size cap BEFORE probe (probe reads the whole file). Exit 4 = GLB_TOO_LARGE.
+// S3-E tip1.1 — PROBE_CACHE is strict (0|1, unset = 1); anything else → CONFIG_INVALID, exit 2.
+try {
+  probeCacheEnabled();
+} catch (err) {
+  console.error(`ERROR ${err.message}`);
+  process.exit(2);
+}
 {
   let mb;
   try {
@@ -141,14 +151,20 @@ if (importMetaPath) {
 }
 
 // S3-D tip1.1 NIT-1 — truncated / bad-magic / unparsable GLB → one clean line, exit 5.
+// S3-E #134 — content-addressed probe cache (PROBE_CACHE=0 → off); failures are never cached.
 let probed;
+let probeCache;
+let glbSha;
+const tProbe0 = performance.now();
 try {
-  probed = probeGlb(glbAbs);
+  ({ probed, probeCache, sha256: glbSha } = cachedProbe(glbAbs, { dataRoot: DATA_DIR }));
 } catch (err) {
   const reason = err?.code === GLB_CORRUPT ? err.reason : "unreadable GLB";
   console.error(`ERROR ${GLB_CORRUPT}: ${path.basename(glbAbs)}: ${reason} — not registered`);
   process.exit(5);
 }
+const probeMs = performance.now() - tProbe0;
+console.log(`probeCache: ${probeCache}`);
 console.log(
   `probe: clips=${JSON.stringify(probed.clips)} armature=${probed.hasArmature} weights=${probed.hasWeights} boneCount=${probed.boneCount}`,
 );
@@ -251,6 +267,7 @@ if (characterType === "humanoid" && idleExcluded && [...idleCandidates].every((c
   process.exit(1);
 }
 
+const tCopy0 = performance.now();
 const assetDir = path.join(DATA_DIR, "assets", id);
 fs.mkdirSync(assetDir, { recursive: true });
 const glbDest = path.join(assetDir, "model.glb");
@@ -266,6 +283,7 @@ if (previewSrc && fs.existsSync(previewSrc)) {
   previewDest = null;
 }
 
+const copyMs = performance.now() - tCopy0;
 const now = new Date().toISOString();
 const body = {
   id,
@@ -324,15 +342,27 @@ if (idleExcluded) {
   }
 }
 if (importMeta) {
+  // S3-E #66 — additive mirror only when importMeta already exists (never creates importMeta).
+  const exportMs = readExportMs(glbAbs, glbSha);
+  const pre = buildTimings({ export: exportMs, probe: probeMs, copy: copyMs, register: 0 }, probeCache);
+  importMeta.timingsMs = {
+    ...(exportMs != null ? { export: pre.stages.export } : {}),
+    probe: pre.stages.probe,
+    copy: pre.stages.copy,
+    total: pre.totalMs,
+    probeCache,
+  };
   body.importMeta = importMeta;
 }
 
+const tReg0 = performance.now();
 const res = await fetch(`${api}/api/assets`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
 });
 const text = await res.text();
+const registerMs = performance.now() - tReg0;
 if (!res.ok) {
   // nothing was registered → do not leave the copied GLB/preview behind as an orphan
   fs.rmSync(assetDir, { recursive: true, force: true });
@@ -342,7 +372,10 @@ if (!res.ok) {
   } catch {
     /* non-JSON */
   }
-  if (res.status === 409 && j?.code === "SLUG_CLASH") {
+  if (res.status === 429 && j?.code === "RATE_LIMITED") {
+    // S3-E #139 — never auto-retry; tell the operator when to try again.
+    console.error(`ERROR RATE_LIMITED: API is throttling changes; retry in ${j.retryAfterSec}s`);
+  } else if (res.status === 409 && j?.code === "SLUG_CLASH") {
     // S3-D #127 — clean one-liner with the server's suggestion
     console.error(`ERROR SLUG_CLASH: slug "${j.slug}" is already used by ${j.existingId}; retry with --slug ${j.suggestedSlug}`);
   } else {
@@ -350,7 +383,25 @@ if (!res.ok) {
   }
   process.exit(1);
 }
-console.log(text);
+// S3-E #66 — timings.json beside the registered asset (gitignored data/; never in goldens).
+const timings = buildTimings(
+  { export: readExportMs(glbAbs, glbSha), probe: probeMs, copy: copyMs, register: registerMs },
+  probeCache,
+);
+try {
+  writeTimings(assetDir, timings);
+} catch {
+  console.warn("WARN timings.json not written");
+}
+// R1 §3/D2 §3 — the register result reports probeCache (additive field; API body unchanged).
+let out = text;
+try {
+  out = JSON.stringify({ ...JSON.parse(text), probeCache });
+} catch {
+  /* non-JSON success body: print as-is */
+}
+console.log(out);
+console.log(`timings: total=${timings.totalMs}ms probe=${timings.stages.probe}ms probeCache=${probeCache}`);
 console.log(
   `OK registered ${id} stage=${stage} characterType=${characterType} clips=${probed.clips.join(",")} → ${glbDest}`,
 );

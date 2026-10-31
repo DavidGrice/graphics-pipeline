@@ -10,10 +10,12 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { unzipStore } from "./zip_store.mjs";
-import { probeGlb } from "./probe_glb.mjs";
+import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
+// S3-E: WB_DATA_ROOT mirrors register_asset.mjs / the API (hermetic tests); default repo data/.
+const DATA_DIR = process.env.WB_DATA_ROOT ? path.resolve(process.env.WB_DATA_ROOT) : path.join(REPO, "data");
 
 function arg(name, fallback) {
   const eq = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -36,6 +38,14 @@ const outdir = arg("outdir", path.join(os.tmpdir(), "gp-pack-import"));
 if (!zipPath || !fs.existsSync(zipPath)) {
   console.error("Usage: import_pack.mjs --zip pack.zip [--force] [--outdir /tmp/...]");
   process.exit(1);
+}
+
+// S3-E tip1.1 — PROBE_CACHE strict (0|1); anything else → CONFIG_INVALID, exit 2.
+try {
+  probeCacheEnabled();
+} catch (err) {
+  console.error(`ERROR ${err.message}`);
+  process.exit(2);
 }
 
 const entries = unzipStore(fs.readFileSync(zipPath));
@@ -89,10 +99,13 @@ for (const meta of pack.assets || []) {
     }
     const dest = path.join(outdir, path.basename(glbRel));
     fs.writeFileSync(dest, file.data);
-    probed = probeGlb(dest);
+    // S3-E #134 — pack import shares the content-addressed probe cache.
+    const pc = cachedProbe(dest, { dataRoot: DATA_DIR });
+    probed = pc.probed;
+    console.log(`probeCache: ${pc.probeCache} ${meta.slug}`);
     // Copy into data/assets for register if API up — use gitignored path
     const id = meta.id && force && hit ? hit.id : randomUUID();
-    const assetDir = path.join(REPO, "data", "assets", id);
+    const assetDir = path.join(DATA_DIR, "assets", id);
     fs.mkdirSync(assetDir, { recursive: true });
     const glbDest = path.join(assetDir, "model.glb");
     fs.copyFileSync(dest, glbDest);

@@ -32,6 +32,33 @@ import {
   type ThemePref,
 } from "./s3dPrefs";
 import {
+  parseRateLimited,
+  rateLimitMessage,
+  remainingSec,
+  timingsTitle,
+  type TimingsMirror,
+} from "./s3eRateLimit";
+import {
+  SCENE_MAX_NODES_DEFAULT,
+  atCap,
+  capLabel,
+  capTitle,
+  capTone,
+  deleteBlock,
+  inUseHint,
+  isTombstone,
+  liveNodes,
+  purgeConfirmText,
+  purgeTombstones,
+  replaceNodeAsset,
+  restoreNode,
+  tombstoneNode,
+  tombstones,
+  undoReplace,
+  wireNode,
+  type ReplaceUndo,
+} from "./s3eScene";
+import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
   TIMESCALE_DEFAULT,
@@ -73,6 +100,8 @@ type SceneNodeDraft = {
   assetId: string;
   defaultClip?: string;
   visible?: boolean;
+  /** S3-E #41 — tombstone (absent = live) */
+  deleted?: boolean;
   transform?: {
     position?: [number, number, number];
     rotation?: [number, number, number];
@@ -89,7 +118,12 @@ type ImportMetaView = {
   humanoidPngApproved?: boolean;
   /** S3-D #49/#97 warn-only import warnings */
   warnings?: Array<{ code: string; message?: string }>;
+  /** S3-E #66 — optional mirror of timings.json */
+  timingsMs?: TimingsMirror;
 };
+
+/** S3-E #139 — which control a 429 countdown is shown under. */
+type RateLimitWhere = "register" | "alt" | "actionMap" | "scene" | "assetDelete";
 
 type AssetMeta = {
   id: string;
@@ -118,6 +152,7 @@ type AssetMeta = {
       assetId: string;
       defaultClip?: string;
       visible?: boolean;
+      deleted?: boolean;
       transform?: {
         position?: [number, number, number];
         rotation?: [number, number, number];
@@ -684,6 +719,7 @@ function normalizeSceneSnapshot(
     assetId: string;
     defaultClip?: string;
     visible?: boolean;
+    deleted?: boolean;
     transform?: {
       position?: [number, number, number];
       rotation?: [number, number, number];
@@ -699,6 +735,7 @@ function normalizeSceneSnapshot(
     assetId: n.assetId,
     defaultClip: n.defaultClip || undefined,
     visible: n.visible !== false,
+    deleted: n.deleted === true,
     transform: {
       position: (n.transform?.position ?? [0, 0, 0]) as [number, number, number],
       rotation: (n.transform?.rotation ?? [0, 0, 0]) as [number, number, number],
@@ -747,6 +784,10 @@ export function App() {
   const [altDraft, setAltDraft] = useState("");
   const [altSaving, setAltSaving] = useState(false);
   const [altError, setAltError] = useState<string | null>(null);
+  // S3-E #139 — one shared cooldown (the API bucket is per client); inline countdown, no auto-retry.
+  const [rlUntil, setRlUntil] = useState(0);
+  const [rlWhere, setRlWhere] = useState<RateLimitWhere | null>(null);
+  const [rlNow, setRlNow] = useState(() => Date.now());
   // S3-D #86/#90 — session-only overrides (not persisted, no schema)
   const [themePref, setThemePref] = useState<ThemePref>("system");
   const [motionPref, setMotionPref] = useState<MotionPref>("system");
@@ -763,6 +804,31 @@ export function App() {
   const [sceneRootId, setSceneRootId] = useState<string | undefined>(undefined);
   const [sceneSaveError, setSceneSaveError] = useState<string | null>(null);
   const [sceneSaving, setSceneSaving] = useState(false);
+  // S3-E #38/#41/#35 — cap (from /api/health limits), deleted-row toggle, purge confirm, replace
+  const [sceneMaxNodes, setSceneMaxNodes] = useState(SCENE_MAX_NODES_DEFAULT);
+  const [showDeleted, setShowDeleted] = useState(true);
+  const [purgeConfirm, setPurgeConfirm] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [replaceUndo, setReplaceUndo] = useState<ReplaceUndo | null>(null);
+  const [replaceErr, setReplaceErr] = useState<string | null>(null);
+  // S3-E #41 — asset delete (asset panel) with inline confirm + in-use hint
+  const [assetDelConfirm, setAssetDelConfirm] = useState(false);
+  const [assetDelMsg, setAssetDelMsg] = useState<string | null>(null);
+  // S3-E #38 — live-node cap from the API (GET, never rate-limited); default 256 if unreachable.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/api/health`)
+      .then((r) => r.json())
+      .then((j: { limits?: { sceneMaxNodes?: unknown } }) => {
+        const m = j?.limits?.sceneMaxNodes;
+        if (alive && typeof m === "number" && Number.isInteger(m) && m >= 1) setSceneMaxNodes(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [gizmoMode, setGizmoMode] = useState<"translate" | "rotate" | "scale">(
     "translate",
   );
@@ -848,6 +914,70 @@ export function App() {
     setAltDraft(selected?.altText ?? "");
     setAltError(null);
   }, [selected?.id, selected?.altText]);
+  useEffect(() => {
+    setAssetDelConfirm(false);
+    setAssetDelMsg(null);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (rlUntil <= Date.now()) return;
+    const t = window.setInterval(() => {
+      const now = Date.now();
+      setRlNow(now);
+      if (now >= rlUntil) window.clearInterval(t);
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [rlUntil]);
+  const rlLeft = remainingSec(rlUntil, rlNow);
+  /** true (and countdown armed) when `r` is a 429 RATE_LIMITED. */
+  const noteRateLimit = (r: Response, text: string, where: RateLimitWhere): boolean => {
+    const sec = parseRateLimited(r.status, text, r.headers.get("Retry-After"));
+    if (sec == null) return false;
+    const now = Date.now();
+    setRlNow(now);
+    setRlUntil(now + sec * 1000);
+    setRlWhere(where);
+    return true;
+  };
+  const rateLimitNote = (where: RateLimitWhere) =>
+    rlLeft > 0 && rlWhere === where ? (
+      <p className="err rate-limited" role="status" aria-live="polite" data-testid="rate-limited">
+        {rateLimitMessage(rlLeft)}
+      </p>
+    ) : null;
+
+  async function deleteSelectedAsset() {
+    if (!selected) return;
+    const target = selected;
+    try {
+      const r = await fetch(`${API}/api/assets/${target.id}`, { method: "DELETE" });
+      const text = r.status === 204 ? "" : await r.text();
+      if (noteRateLimit(r, text, "assetDelete")) return;
+      if (r.status === 204) {
+        setAssetDelConfirm(false);
+        setAssetDelMsg(null);
+        setSelected(null);
+        await refresh();
+        return;
+      }
+      let j: { code?: string; error?: string; refs?: string[]; deletedRefs?: string[] } | null = null;
+      try {
+        j = JSON.parse(text);
+      } catch {
+        /* non-JSON */
+      }
+      const name = (id: string) => assets.find((a) => a.id === id)?.slug ?? id.slice(0, 8);
+      setAssetDelMsg(
+        inUseHint(j, name) ??
+          (j?.code === "ASSET_IN_USE"
+            ? `Used by scene(s) ${(j.refs ?? []).map(name).join(", ")} — remove those nodes first`
+            : `${j?.code ?? r.status}: ${j?.error ?? "delete failed"}`),
+      );
+      setAssetDelConfirm(false);
+    } catch (err) {
+      setAssetDelMsg(`Delete failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   async function saveAltText() {
     if (!selected) return;
@@ -862,6 +992,7 @@ export function App() {
         body: JSON.stringify({ altText: st.trimmed }),
       });
       const text = await r.text();
+      if (noteRateLimit(r, text, "alt")) return;
       if (!r.ok) {
         let msg = `${r.status}`;
         try {
@@ -908,6 +1039,7 @@ export function App() {
         assetId: n.assetId,
         defaultClip: n.defaultClip,
         visible: n.visible !== false,
+        ...(n.deleted === true ? { deleted: true } : {}),
         transform: n.transform
           ? {
               position: (n.transform.position ?? [0, 0, 0]) as [
@@ -934,8 +1066,11 @@ export function App() {
       setCameraSel("");
       setCameraErr(null);
       setSceneRootId(selected.scene?.rootId ?? nodes[0]?.id);
-      setSceneNodeId(selected.scene?.rootId ?? nodes[0]?.id ?? null);
+      setSceneNodeId(selected.scene?.rootId ?? liveNodes(nodes)[0]?.id ?? null);
       setSceneSaveError(null);
+      setReplaceUndo(null);
+      setReplaceOpen(false);
+      setPurgeConfirm(false);
     } else {
       setSceneDraft([]);
       setCamerasDraft([]);
@@ -1032,7 +1167,11 @@ export function App() {
   });
 
   const isScene = selected?.stage === "scene";
-  const sceneNodes = isScene && sceneDraft.length > 0 ? sceneDraft : selected?.scene?.nodes ?? [];
+  // S3-E #41 — tombstoned nodes are never rendered / preflighted / gizmo-selectable.
+  const sceneNodes = liveNodes(isScene && sceneDraft.length > 0 ? sceneDraft : selected?.scene?.nodes ?? []);
+  const liveCount = liveNodes(sceneDraft).length;
+  const deletedCount = sceneDraft.length - liveCount;
+  const capReached = atCap(sceneDraft, sceneMaxNodes);
   const nonSceneAssets = useMemo(
     () => assets.filter((a) => a.stage !== "scene"),
     [assets],
@@ -1044,6 +1183,10 @@ export function App() {
       : `n-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 
   const addSceneNode = () => {
+    if (atCap(sceneDraft, sceneMaxNodes)) {
+      setSceneSaveError(`SCENE_NODES_MAX: ${capTitle(sceneMaxNodes)}`);
+      return;
+    }
     const first = nonSceneAssets[0];
     const id = newNodeId();
     setSceneDraft((prev) => [
@@ -1053,7 +1196,7 @@ export function App() {
         assetId: first?.id ?? first?.slug ?? "",
         visible: true,
         transform: {
-          position: [prev.length * 2, 0, 0],
+          position: [liveNodes(prev).length * 2, 0, 0],
           rotation: [0, 0, 0],
           scale: [1, 1, 1],
         },
@@ -1063,24 +1206,55 @@ export function App() {
     setSceneNodeId(id);
   };
 
+  // S3-E #41 — Delete = tombstone (keeps id + transform); root / last live node are blocked.
   const removeSceneNode = (id: string) => {
-    setSceneDraft((prev) => {
-      if (prev.length <= 1) {
-        setSceneSaveError("scene must keep ≥1 node (V1)");
-        return prev;
-      }
-      const next = prev.filter((n) => n.id !== id);
-      if (sceneRootId === id) {
-        setSceneRootId(next[0]?.id);
-      }
-      if (sceneNodeId === id) setSceneNodeId(next[0]?.id ?? null);
-      return next;
-    });
+    const res = tombstoneNode(sceneDraft, id, sceneRootId ?? sceneDraft[0]?.id);
+    if ("error" in res) {
+      setSceneSaveError(res.error);
+      return;
+    }
+    setSceneDraft(res.nodes);
+    if (sceneNodeId === id) setSceneNodeId(sceneRootId ?? liveNodes(res.nodes)[0]?.id ?? null);
+    if (replaceUndo?.nodeId === id) setReplaceUndo(null);
+    setReplaceOpen(false);
+    setSceneSaveError(null);
+  };
+  const restoreSceneNode = (id: string) => {
+    const res = restoreNode(sceneDraft, id, sceneMaxNodes);
+    if ("error" in res) {
+      setSceneSaveError(res.error);
+      return;
+    }
+    setSceneDraft(res.nodes);
+    setSceneSaveError(null);
+  };
+  const purgeDeleted = () => {
+    setSceneDraft((prev) => purgeTombstones(prev));
+    setPurgeConfirm(false);
+  };
+  // S3-E #35 — Replace asset… keeps id / transform / visible; one undo step until Save.
+  const replaceSelectedAsset = (target: AssetMeta) => {
+    if (!sceneNodeId || !selected) return;
+    const res = replaceNodeAsset(sceneDraft, sceneNodeId, target, selected.id);
+    if ("error" in res) {
+      setReplaceErr(res.error);
+      return;
+    }
+    setSceneDraft(res.nodes);
+    setReplaceUndo(res.undo);
+    setReplaceErr(null);
+    setReplaceOpen(false);
+    setReplaceQuery("");
   };
 
   // S3-C #26 — duplicate selected node (new id, +0.5 X or +snap step).
   const duplicateSelectedNode = () => {
     if (!sceneNodeId) return;
+    if (isTombstone(sceneDraft.find((n) => n.id === sceneNodeId))) return;
+    if (atCap(sceneDraft, sceneMaxNodes)) {
+      setSceneSaveError(`SCENE_NODES_MAX: ${capTitle(sceneMaxNodes)}`);
+      return;
+    }
     const res = duplicateSceneNode(sceneDraft, sceneNodeId, {
       newId: newNodeId(),
       snapEnabled,
@@ -1227,6 +1401,7 @@ export function App() {
         body: JSON.stringify({ importMeta }),
       });
       const textBody = await r.text();
+      if (noteRateLimit(r, textBody, "actionMap")) return;
       if (!r.ok) throw new Error(`${r.status} ${textBody}`);
       const updated = JSON.parse(textBody) as AssetMeta;
       setAssets((list) =>
@@ -1245,11 +1420,11 @@ export function App() {
 
   const persistScene = async () => {
     if (!selected || selected.stage !== "scene") return;
-    if (sceneDraft.length < 1) {
-      setSceneSaveError("scene.nodes must have ≥1 node");
+    if (liveNodes(sceneDraft).length < 1) {
+      setSceneSaveError("SCENE_NO_LIVE_NODES: a scene needs at least one live node");
       return;
     }
-    if (sceneDraft.some((n) => !n.assetId.trim())) {
+    if (liveNodes(sceneDraft).some((n) => !n.assetId.trim())) {
       setSceneSaveError("every node needs assetId (id or slug)");
       return;
     }
@@ -1262,13 +1437,8 @@ export function App() {
         scene: {
           version: selected.scene?.version ?? 1,
           rootId: sceneRootId ?? sceneDraft[0]?.id,
-          nodes: sceneDraft.map((n) => ({
-            id: n.id,
-            assetId: n.assetId.trim(),
-            defaultClip: n.defaultClip || undefined,
-            visible: n.visible !== false,
-            transform: n.transform,
-          })),
+          // S3-E #41 — tombstones travel as `deleted: true`; Save never purges.
+          nodes: sceneDraft.map((n) => wireNode(n)),
           view: { ground: viewDraft.ground, shadows: viewDraft.shadows },
           cameras: camerasDraft,
         },
@@ -1280,7 +1450,17 @@ export function App() {
         body: JSON.stringify({ scene: body.scene }),
       });
       const textBody = await r.text();
-      if (!r.ok) throw new Error(`${r.status} ${textBody}`);
+      if (noteRateLimit(r, textBody, "scene")) return;
+      if (!r.ok) {
+        try {
+          const j = JSON.parse(textBody) as { code?: string; max?: number };
+          if (j.code === "SCENE_NODES_MAX" && typeof j.max === "number") setSceneMaxNodes(j.max);
+        } catch {
+          /* non-JSON */
+        }
+        throw new Error(`${r.status} ${textBody}`);
+      }
+      setReplaceUndo(null);
       const updated = JSON.parse(textBody) as AssetMeta;
       setAssets((list) =>
         list.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)),
@@ -1358,6 +1538,7 @@ export function App() {
         body: JSON.stringify(body),
       });
       const text = await r.text();
+      if (noteRateLimit(r, text, "register")) return;
       // S3-D #127 — keep the form and its values; show the inline clash + suggestion
       const clash = parseSlugClash(r.status, text);
       if (clash) {
@@ -1438,6 +1619,7 @@ export function App() {
         assetId: n.assetId,
         defaultClip: n.defaultClip,
         visible: n.visible,
+        deleted: n.deleted === true,
         transform: n.transform,
       })),
       selected.scene?.rootId,
@@ -1527,11 +1709,14 @@ export function App() {
               {recent.map((a) => {
                 const b = characterTypeBadge(a);
                 const n = warningsCount(a);
+                // S3-D #94 + S3-E #66 — total import time tooltip when the timings mirror exists
+                const tt = timingsTitle(a.importMeta?.timingsMs);
                 return (
                   <li key={a.id}>
                     <button
                       type="button"
                       className="recent-row"
+                      title={tt ?? undefined}
                       data-testid="recent-import-row"
                       onClick={() => {
                         const live = assets.find((x) => x.id === a.id) ?? a;
@@ -1588,7 +1773,8 @@ export function App() {
                 </button>
               </div>
             )}
-            <button type="button" onClick={submitRegister}>
+            {rateLimitNote("register")}
+            <button type="button" data-testid="register-submit" disabled={rlLeft > 0} onClick={submitRegister}>
               POST /api/assets
             </button>
           </div>
@@ -1783,7 +1969,13 @@ export function App() {
             </mesh>
           ) : null}
           {/* S3-D #90 — no inertial damping when motion is reduced */}
-          <OrbitControls makeDefault ref={controlsRef} enableDamping={!reducedMotion} />
+          {/* S3-E #87 — touch: 1 finger rotates, 2 fingers pinch-zoom + pan (canvas only) */}
+          <OrbitControls
+            makeDefault
+            ref={controlsRef}
+            enableDamping={!reducedMotion}
+            touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
+          />
           <Suspense fallback={null}>
             {isScene
               ? sceneNodes.map((n) => {
@@ -1985,13 +2177,14 @@ export function App() {
                 <button
                   type="button"
                   className="tiny primary"
-                  disabled={actionMapSaving || !actionMapDirty}
+                  disabled={actionMapSaving || !actionMapDirty || rlLeft > 0}
                   onClick={() => void persistActionMap()}
                 >
                   {actionMapSaving ? "Saving…" : "Save actionMap"}
                 </button>
               </div>
               {actionMapError && <p className="err">{actionMapError}</p>}
+              {rateLimitNote("actionMap")}
             </div>
             {selected.license && (
               <div className="import-meta-row">
@@ -2027,7 +2220,7 @@ export function App() {
                       type="button"
                       className="tiny primary"
                       data-testid="alt-text-save"
-                      disabled={altSaving || st.over || !dirty}
+                      disabled={altSaving || st.over || !dirty || rlLeft > 0}
                       title={st.over ? `Max ${ALT_TEXT_MAX} characters` : "PATCH altText (empty clears)"}
                       onClick={() => void saveAltText()}
                     >
@@ -2035,9 +2228,36 @@ export function App() {
                     </button>
                   </div>
                   {altError && <p className="err">{altError}</p>}
+                  {rateLimitNote("alt")}
                 </div>
               );
             })()}
+            {/* S3-E #41 — Delete asset: inline confirm; 409 ASSET_IN_USE explains tombstoned refs */}
+            <div className="import-meta-row asset-delete-row">
+              {assetDelConfirm ? (
+                <span className="purge-confirm" role="alert">
+                  <span>
+                    Delete <code>{selected.slug}</code>? Files on disk are kept.
+                  </span>
+                  <button type="button" className="tiny danger" data-testid="asset-delete-confirm" disabled={rlLeft > 0} onClick={() => void deleteSelectedAsset()}>
+                    Delete
+                  </button>
+                  <button type="button" className="tiny" onClick={() => setAssetDelConfirm(false)}>
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button type="button" className="tiny danger" data-testid="asset-delete" onClick={() => { setAssetDelConfirm(true); setAssetDelMsg(null); }}>
+                  Delete asset…
+                </button>
+              )}
+              {assetDelMsg && (
+                <p className="err" role="alert" data-testid="asset-delete-msg">
+                  {assetDelMsg}
+                </p>
+              )}
+              {rateLimitNote("assetDelete")}
+            </div>
             {selected.clipDurations &&
               Object.keys(selected.clipDurations).length > 0 && (
                 <div className="import-meta-actions">
@@ -2057,7 +2277,13 @@ export function App() {
           <div className="scene-stub-panel scene-author-panel" aria-label="Scene author">
             <div className="import-meta-title">
               Scene author · v{selected?.scene?.version ?? 1} ·{" "}
-              {sceneDraft.length} node{sceneDraft.length === 1 ? "" : "s"}
+              <span
+                className={`node-count node-count-${capTone(liveCount, sceneMaxNodes)}`}
+                data-testid="node-count"
+                title={capReached ? capTitle(sceneMaxNodes) : "Live nodes / cap (deleted nodes don't count)"}
+              >
+                {capLabel(liveCount, sceneMaxNodes)}
+              </span>
               {sceneRootId ? ` · root ${sceneRootId}` : ""}
               {sceneDirty ? (
                 <span className="badge off" title="Draft differs from last saved scene.nodes">
@@ -2072,22 +2298,31 @@ export function App() {
               )}
             </div>
             <div className="scene-author-actions">
-              <button type="button" className="tiny" onClick={addSceneNode}>
+              <button
+                type="button"
+                className="tiny"
+                data-testid="node-add"
+                disabled={capReached}
+                title={capReached ? capTitle(sceneMaxNodes) : "Add a node"}
+                onClick={addSceneNode}
+              >
                 + Add node
               </button>
               <button
                 type="button"
                 className="tiny"
-                disabled={!sceneNodeId}
+                data-testid="node-duplicate"
+                disabled={!sceneNodeId || capReached}
                 onClick={duplicateSelectedNode}
-                title="Duplicate selected node (+0.5 X, or +snap step)"
+                title={capReached ? capTitle(sceneMaxNodes) : "Duplicate selected node (+0.5 X, or +snap step)"}
               >
                 Duplicate
               </button>
               <button
                 type="button"
                 className="tiny primary"
-                disabled={sceneSaving || sceneDraft.length < 1 || !sceneDirty}
+                data-testid="scene-save"
+                disabled={sceneSaving || liveCount < 1 || !sceneDirty || rlLeft > 0}
                 onClick={() => void persistScene()}
               >
                 {sceneSaving ? "Saving…" : sceneDirty ? "Save" : "Saved"}
@@ -2171,6 +2406,7 @@ export function App() {
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
+            {rateLimitNote("scene")}
             {(() => {
               // S3-D #127 / R1 §6 — V4a ambiguity links to the conflicting assets
               const amb = ambiguousSlugOf(sceneSaveError);
@@ -2186,8 +2422,79 @@ export function App() {
                 </div>
               ) : null;
             })()}
+            {deletedCount > 0 && (
+              <div className="scene-author-actions" aria-label="Deleted nodes">
+                <label className="tiny" style={{ display: "inline-flex", gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    data-testid="nodes-show-deleted"
+                    checked={showDeleted}
+                    onChange={(e) => setShowDeleted(e.target.checked)}
+                  />
+                  Show deleted ({deletedCount})
+                </label>
+                {purgeConfirm ? (
+                  <span className="purge-confirm" role="alert">
+                    <span>{purgeConfirmText(deletedCount)}</span>
+                    <button type="button" className="tiny danger" data-testid="nodes-purge-confirm" onClick={purgeDeleted}>
+                      Purge
+                    </button>
+                    <button type="button" className="tiny" onClick={() => setPurgeConfirm(false)}>
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" className="tiny danger" data-testid="nodes-purge" onClick={() => setPurgeConfirm(true)}>
+                    Purge deleted ({deletedCount})
+                  </button>
+                )}
+              </div>
+            )}
+            {replaceUndo && (
+              <div className="scene-author-actions">
+                <span className="replace-chip" role="status">
+                  Replaced <code>{resolveChild(replaceUndo.prevAssetId)?.slug ?? replaceUndo.from}</code> → <code>{replaceUndo.to}</code> ·{" "}
+                  <button
+                    type="button"
+                    className="tiny"
+                    data-testid="node-replace-undo"
+                    onClick={() => {
+                      setSceneDraft((prev) => undoReplace(prev, replaceUndo));
+                      setReplaceUndo(null);
+                    }}
+                  >
+                    Undo
+                  </button>
+                </span>
+              </div>
+            )}
             <ul className="scene-node-list">
               {sceneDraft.map((n) => {
+                if (isTombstone(n)) {
+                  // S3-E #41 — struck-through tombstone row: not selectable, Restore only.
+                  if (!showDeleted) return null;
+                  const tc = resolveChild(n.assetId);
+                  return (
+                    <li key={n.id} className="scene-node-deleted" data-testid={`node-row-deleted-${n.id}`}>
+                      <span className="scene-node tombstone" aria-disabled="true">
+                        <code>{n.id.slice(0, 8)}</code>
+                        <span className="muted"> → </span>
+                        <code>{tc?.slug ?? n.assetId}</code>
+                        <span className="badge off pill-deleted">deleted</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="tiny"
+                        data-testid={`node-restore-${n.id}`}
+                        disabled={capReached}
+                        title={capReached ? capTitle(sceneMaxNodes) : "Restore this node"}
+                        onClick={() => restoreSceneNode(n.id)}
+                      >
+                        Restore
+                      </button>
+                    </li>
+                  );
+                }
                 const child = resolveChild(n.assetId);
                 const isRoot = (sceneRootId ?? sceneDraft[0]?.id) === n.id;
                 const pos = n.transform?.position ?? [0, 0, 0];
@@ -2338,14 +2645,67 @@ export function App() {
                           >
                             Set root
                           </button>
+                          {(() => {
+                            const blk = deleteBlock(sceneDraft, n.id, sceneRootId ?? sceneDraft[0]?.id);
+                            return (
+                              <button
+                                type="button"
+                                className="tiny danger"
+                                data-testid={`node-delete-${n.id}`}
+                                disabled={!!blk}
+                                title={blk ? blk.title : "Delete (soft — Restore or Purge later)"}
+                                onClick={() => removeSceneNode(n.id)}
+                              >
+                                Delete
+                              </button>
+                            );
+                          })()}
                           <button
                             type="button"
-                            className="tiny danger"
-                            onClick={() => removeSceneNode(n.id)}
+                            className="tiny"
+                            data-testid={`node-replace-${n.id}`}
+                            aria-expanded={replaceOpen}
+                            onClick={() => {
+                              setReplaceOpen((v) => !v);
+                              setReplaceErr(null);
+                            }}
                           >
-                            Remove
+                            Replace asset…
                           </button>
                         </div>
+                        {replaceOpen && (
+                          <div className="replace-picker" aria-label="Replace asset picker">
+                            <input
+                              type="search"
+                              placeholder="Search assets"
+                              aria-label="Search replacement asset"
+                              value={replaceQuery}
+                              onChange={(e) => setReplaceQuery(e.target.value)}
+                            />
+                            <ul className="replace-results">
+                              {assets
+                                .filter((a) => a.id !== n.assetId && a.slug !== n.assetId)
+                                .filter((a) => {
+                                  const q = replaceQuery.trim().toLowerCase();
+                                  return !q || a.slug.toLowerCase().includes(q) || (a.name ?? "").toLowerCase().includes(q) || (a.tags ?? []).some((t) => t.toLowerCase().includes(q));
+                                })
+                                .slice(0, 30)
+                                .map((a) => (
+                                  <li key={a.id}>
+                                    <button
+                                      type="button"
+                                      className="tiny"
+                                      data-testid={`replace-pick-${a.slug}`}
+                                      onClick={() => replaceSelectedAsset(a)}
+                                    >
+                                      {a.slug} <span className="muted">({a.stage ?? "—"})</span>
+                                    </button>
+                                  </li>
+                                ))}
+                            </ul>
+                            {replaceErr && <p className="err" role="alert">{replaceErr}</p>}
+                          </div>
+                        )}
                       </div>
                     )}
                   </li>

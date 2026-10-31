@@ -17,10 +17,15 @@ const SKIP_DIR = new Set(["node_modules", "dist", "build", ".vite", "__pycache__
  */
 export const NON_CODES = new Set([
   "ARMATURE_NAME",
+  "CORS_ORIGINS",
   "KRITA_FP_DEBUG",
   "KRITA_FP_PORT",
   "KRITA_FP_TOKEN",
+  "MAX_GLB_MB",
+  "RATE_LIMIT_PER_MIN",
+  "SCENE_MAX_NODES",
   "SMOKE_MODE",
+  "TRUST_PROXY",
 ]);
 
 const UPPER = "[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+";

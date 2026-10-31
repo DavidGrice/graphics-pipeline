@@ -646,3 +646,75 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 4px;
   min-height: 24px;
 }
+
+/* S3-E #38 — "Nodes n / max" counter: warning ≥ 90 %, error at the cap (theme vars only) */
+.node-count { font-variant-numeric: tabular-nums; }
+.node-count-warn { color: var(--import-text); font-weight: 600; }
+.node-count-max { color: var(--err); font-weight: 600; }
+
+/* S3-E #41 — tombstone rows: struck through + "deleted" pill. Muted colour instead of 50 %
+   opacity so the text keeps AA contrast (4.5:1) in both #86 themes. */
+.scene-node-list li.scene-node-deleted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.scene-node.tombstone {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  cursor: default;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+}
+.scene-node.tombstone code { text-decoration: line-through; }
+.pill-deleted { text-decoration: none; display: inline-block; margin-left: 4px; }
+.purge-confirm, .replace-chip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 0.78rem; }
+
+/* S3-E #35 — Replace asset… picker */
+.replace-picker { display: flex; flex-direction: column; gap: 4px; }
+.replace-picker input[type="search"] {
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+}
+.replace-results { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; max-height: 10rem; overflow: auto; }
+.asset-delete-row { flex-wrap: wrap; gap: 4px 8px; }
+
+/* S3-E #87 — touch orbit stays on the canvas: the canvas swallows touch gestures
+   (1-finger rotate, 2-finger pinch/pan via OrbitControls); everything else scrolls normally. */
+/* three OrbitControls writes inline touch-action on connect/disconnect (remounts can leave "auto"); keep gestures canvas-only. */
+.viewer canvas { touch-action: none !important; }
+
+/* S3-E #87 — phone layout (390×844): single column, page scrolls, dock keeps 45vh + internal
+   scroll (#82 rule), rows wrap, touch targets ≥ 44×44 px below 600 px. */
+@media (max-width: 599px) {
+  html, body, #root { height: auto; min-height: 100%; }
+  .layout { display: flex; flex-direction: column; height: auto; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--rule); max-height: none; overflow: visible; }
+  .viewer { height: auto; min-height: 0; }
+  /* overlays drop into the flow below the canvas so they never cover touch-orbit space */
+  .viewer-stage { display: flex; flex-direction: column; height: auto; flex: none; }
+  .viewer-stage > .viewer-canvas { position: relative; inset: auto; order: -1; height: 56vh; min-height: 320px; flex: none; }
+  .viewer-stage > .import-meta-panel,
+  .viewer-stage > .scene-author-panel,
+  .viewer-stage > .stats-panel {
+    position: static; width: auto; max-width: none; max-height: none; overflow: visible; margin: 8px;
+  }
+  button, button.tiny, select, input[type="checkbox"], input[type="number"], input[type="search"], .recent-imports button.recent-row {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .viewer .viewer-dock button, .viewer .viewer-dock select,
+  .viewer .scene-author-panel button, .viewer .scene-author-panel select { min-height: 44px; min-width: 44px; height: auto; }
+  input[type="checkbox"] { width: 22px; }
+  label:has(> input[type="checkbox"]) { min-height: 44px; display: inline-flex; align-items: center; }
+}
+/* desktop: dock + author targets stay ≥ 24 px (WCAG 2.5.8) */
+@media (min-width: 600px) {
+  .viewer-dock button, .viewer-dock select, .scene-author-panel button { min-height: 24px; }
+}

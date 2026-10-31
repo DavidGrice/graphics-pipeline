@@ -16,14 +16,24 @@ concurrency:
 
 jobs:
   build-test:
+    name: build-test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    # S3-E #99: Node 22 + 24 (Node 20 dropped, EOL Apr 2026); both legs run build + typecheck + test:s1
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
     steps:
       - name: Promotion gate
         if: github.event_name == 'pull_request'
+        # head_ref is attacker-controlled on forks: pass it via env, never inline (actionlint #107)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          base="${{ github.base_ref }}"
-          head="${{ github.head_ref }}"
+          base="${BASE_REF}"
+          head="${HEAD_REF}"
           echo "PR base=${base} head=${head}"
           # Ladder: topic → dev → test → main (prod). Block skip-levels.
           if [[ "${base}" == "main" && "${head}" != "test" ]]; then
@@ -38,7 +48,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
         with:
-          node-version-file: ".nvmrc"
+          node-version: ${{ matrix.node }}
           cache: npm
       - name: Install
         run: npm ci
@@ -48,6 +58,8 @@ jobs:
         run: npm run build -w @graphics-pipeline/mcp-krita
       - name: Typecheck
         run: npm run typecheck --if-present
+      - name: Build world-builder client
+        run: npm run build -w @graphics-pipeline/world-builder-client
       - name: Sprint 1 acceptance tests
         run: npm run test:s1
       - name: Forbid tracked media under data/
@@ -60,6 +72,51 @@ jobs:
             exit 1
           fi
           echo "OK: no tracked data/** media binaries"
+
+  # S3-E #144 gitleaks (full history) + #107 actionlint/shellcheck. Tools are pinned and checksum-verified;
+  # the npm scripts print SKIP_PLATFORM only where a tool is absent (local dev), never here.
+  lint-secrets:
+    name: lint + secrets
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.21.2"
+      GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+      ACTIONLINT_VERSION: "1.7.4"
+      ACTIONLINT_SHA256: "fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+      - name: Install gitleaks, actionlint, shellcheck (pinned, fail-closed)
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/lint-bin"
+          mkdir -p "${bin}"
+          gl="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${gl}" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${gl}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${gl}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${gl}" -C "${bin}" gitleaks
+          al="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${al}" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${al}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${al}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${al}" -C "${bin}" actionlint
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          fi
+          echo "${bin}" >> "$GITHUB_PATH"
+      - name: Tool versions
+        run: |
+          set -euo pipefail
+          gitleaks version
+          actionlint -version
+          shellcheck --version
+      - name: actionlint + shellcheck (npm run lint:ci)
+        run: npm run lint:ci
+      - name: Secrets scan (npm run scan:secrets)
+        run: npm run scan:secrets
 
   blender-smoke:
     name: S2-D Blender smoke (${{ matrix.SMOKE_MODE }})

@@ -65,6 +65,8 @@ export async function validateSceneChildren(nodes, resolveDoc, opts = {}) {
     if (!node || typeof node.id !== "string" || typeof node.assetId !== "string") {
       return "scene node missing id/assetId";
     }
+    // S3-E #41 — tombstoned nodes are skipped by V4/V4a/V5/V6b/V8 resolve (kept verbatim).
+    if (node.deleted === true) continue;
 
     /** @type {AssetDoc|null} */
     let child = null;

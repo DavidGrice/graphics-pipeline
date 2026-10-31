@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.5.0
+  version: 0.6.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
@@ -10,6 +10,15 @@ info:
     MAX_GLB_MB (env, default 100, integer >= 1; invalid -> server refuses to start).
     S3-D 0.5.0: every error code, HTTP status and CLI exit is listed in docs/error-codes.md
     (#152; kept in sync both ways by tests/s3d-error-codes.test.mjs).
+    S3-E 0.6.0: POST/PATCH/DELETE under /api are rate-limited per client IP (RATE_LIMIT_PER_MIN,
+    default 60) -> 429 RATE_LIMITED {retryAfterSec} + Retry-After header; GET/HEAD/OPTIONS never.
+    CORS is an exact-origin allowlist (CORS_ORIGINS, default http://localhost:5173 and
+    http://127.0.0.1:5173; never "*"); a disallowed preflight -> 403 CORS_ORIGIN_DENIED.
+    Invalid RATE_LIMIT_PER_MIN / CORS_ORIGINS / TRUST_PROXY / MAX_GLB_MB / SCENE_MAX_NODES -> CONFIG_INVALID, no start.
+    S3-E E2: scene nodes may carry `deleted: true` (tombstone; false is normalised away). Live nodes are
+    capped by SCENE_MAX_NODES (default 256) -> 400 SCENE_NODES_MAX {max,count}; tombstoning the root ->
+    400 SCENE_ROOT_DELETE; no live nodes left -> 400 SCENE_NO_LIVE_NODES. GET /api/health adds
+    limits.sceneMaxNodes.
 servers:
   - url: http://127.0.0.1:8787
     description: Local world-builder
@@ -80,6 +89,8 @@ paths:
             schema:
               type: object
       responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "201":
           description: Created/upserted
         "400":
@@ -130,6 +141,8 @@ paths:
             schema:
               type: object
       responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "200":
           description: Updated
         "400":
@@ -147,12 +160,14 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "204":
           description: Deleted
         "404":
           description: Not found
         "409":
-          description: ASSET_IN_USE {refs} - still referenced by a scene
+          description: ASSET_IN_USE {refs, deletedRefs} - still referenced by a scene (tombstoned nodes still block; deletedRefs = scenes referencing it only via deleted nodes)
   /api/assets/{id}/clip-ux:
     patch:
       summary: Patch clipUx only
@@ -177,6 +192,8 @@ paths:
                 blendMs: { type: number, minimum: 0, maximum: 1000 }
                 timeScale: { type: number, minimum: 0.5, maximum: 2 }
       responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "200":
           description: Updated
         "400":
@@ -233,7 +250,23 @@ paths:
           content:
             application/yaml: {}
 components:
+  responses:
+    RateLimited:
+      description: RATE_LIMITED (S3-E #139) — per-IP token bucket empty; wait Retry-After seconds
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/RateLimited" }
   schemas:
+    RateLimited:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [retryAfterSec]
+          properties:
+            retryAfterSec: { type: integer, minimum: 1 }
     Error:
       type: object
       required: [code, error]
