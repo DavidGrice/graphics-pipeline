@@ -4,7 +4,8 @@
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
 import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
@@ -1080,6 +1081,33 @@ export function App() {
   useEffect(() => {
     if (shareOpen && qrRef.current && shareLink) drawQr(qrRef.current, shareLink, 168);
   }, [shareOpen, shareLink]);
+  // NIT-F-1 — keep the share popover inside the viewport (8px margin): clamp left, prefer below,
+  // flip above; < 600px wide it becomes a bottom sheet (CSS). Recomputed on resize/scroll.
+  const shareBtnRef = useRef<HTMLButtonElement | null>(null);
+  const sharePopRef = useRef<HTMLDivElement | null>(null);
+  const [sharePos, setSharePos] = useState<CSSProperties>({ visibility: "hidden" });
+  useLayoutEffect(() => {
+    if (!shareOpen) return;
+    const place = () => {
+      const btn = shareBtnRef.current, pop = sharePopRef.current;
+      if (!btn || !pop) return;
+      const vw = window.innerWidth, vh = window.innerHeight, M = 8;
+      if (vw < 600) { setSharePos({}); return; }
+      const b = btn.getBoundingClientRect();
+      const w = pop.offsetWidth, h = pop.offsetHeight;
+      const left = Math.max(M, Math.min(b.right - w, vw - w - M));
+      let top = b.bottom + 4;
+      if (top + h > vh - M) top = b.top - 4 - h >= M ? b.top - 4 - h : Math.max(M, vh - h - M);
+      setSharePos({ left, top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [shareOpen, shareLink]);
   useEffect(() => {
     setShareOpen(false);
     setReqOpen(null);
@@ -2053,6 +2081,7 @@ export function App() {
                   className="tiny"
                   aria-expanded={shareOpen}
                   data-testid="share-button"
+                  ref={shareBtnRef}
                   onClick={() => {
                     setShareCopied(false);
                     setShareOpen((o) => !o);
@@ -2061,7 +2090,7 @@ export function App() {
                   Share
                 </button>
                 {shareOpen && (
-                  <div className="share-pop" role="dialog" aria-label="Share link">
+                  <div className="share-pop" ref={sharePopRef} style={sharePos} data-testid="share-pop" role="dialog" aria-label="Share link">
                     <canvas
                       ref={qrRef}
                       data-testid="share-qr"
@@ -2074,6 +2103,7 @@ export function App() {
                     <button
                       type="button"
                       className="tiny"
+                      data-testid="share-copy"
                       onClick={() => {
                         void navigator.clipboard?.writeText(shareLink).then(() => setShareCopied(true), () => setShareCopied(false));
                       }}

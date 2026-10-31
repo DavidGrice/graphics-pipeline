@@ -735,11 +735,15 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 /* S3-F E2 — share popover (#85), clip requires (#11), featured strip (#140) */
 .share-wrap { position: relative; display: inline-block; }
 .share-pop {
-  position: absolute; z-index: 20; top: 100%; right: 0; margin-top: 4px; padding: 8px;
+  position: fixed; z-index: 40; padding: 8px; box-sizing: border-box; max-width: calc(100vw - 16px);
   display: flex; flex-direction: column; gap: 6px; min-width: 200px;
   background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px;
 }
 .share-pop canvas { width: 168px; height: 168px; image-rendering: pixelated; align-self: center; }
+/* NIT-F-1: < 600px → bottom sheet, 100vw - 16px; QR (incl. quiet zone) stays 168px ≥ 160 */
+@media (max-width: 599.98px) {
+  .share-pop { left: 8px; right: 8px; bottom: 8px; top: auto; width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
+}
 .share-url { font: inherit; font-size: 12px; width: 100%; }
 .share-hint { margin: 0; font-size: 12px; }
 .req-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; }
