@@ -17,10 +17,11 @@
 ## 3. #85 QR share
 - "Share" button on asset and scene pages opens a small popover: QR (drawn client-side to `<canvas>`, ≥ 160px, quiet zone kept), the URL as selectable text, and "Copy link".
 - Base is `PUBLIC_BASE_URL` when set, else `location.origin`. When the host is loopback (`localhost`, `127.0.0.1`, `::1`) show the hint "This link only works on this device."
+- **Placement (NIT-F-1, tip `900637e`):** opens below Share, flips above when there's no room; left clamped to `[8px, innerWidth − width − 8px]`; repositions on resize and scroll. Under 600px wide it's a bottom sheet `innerWidth − 16px` wide, QR ≥ 160px, URL and Copy beneath. Test ids `share-pop`, `share-copy`. AC: at 390, 1280 and 1920, `left ≥ 0`, `right ≤ innerWidth`, `bottom ≤ innerHeight`, and `elementFromPoint` at Copy's centre is Copy (S3-C #82).
 - QR canvas has `role="img"` and `aria-label="QR code for <url>"`. No network request when opening (AC: network panel shows zero requests).
 
 ## 4. #140 Featured strip
-- Viewer gets a "Featured" strip above Transport in the dock (row order: Author, Blend/Speed, View, **Featured**, Transport). Hidden when the list is empty.
+- Viewer gets a "Featured" strip above Transport in the dock (row order: Author, Blend/Speed, View, **Featured**, Transport). Hidden when the list is empty; if scenes exist, a "Feature scenes…" button shows instead so a list can be started (approved deviation 3).
 - Prev / next buttons (24px+), current title, "n / N". Left/right arrow keys work when the strip has focus. Auto-advance every 8s only when `prefers-reduced-motion` is not set; it pauses on hover or focus. Stale ids from GET are simply not shown.
 - Editing: an "Edit featured" dialog with a reorderable list (up/down buttons, not drag-only), add from scenes, remove. Save is PUT `/api/featured`; `FEATURED_INVALID` and `RATE_LIMITED` show inline.
 
@@ -28,7 +29,7 @@
 - Asset panel Import section shows "Source: `name.kra`" when `importMeta.sourceKra` is present. Basename only; nothing shown when absent.
 
 ## 6. #52 Bridge badge
-- Health badge text is "Krita: ok", "Krita: unauthorized", "Krita: down", "Krita: mock" or "Krita: skipped", from `bridge.status`, with `bridge.mode` in `title`. Icon + text, never colour alone. `unauthorized` uses the warning style, `down` the error style.
+- Health badge text is "Krita: ok", "Krita: unauthorized", "Krita: down", "Krita: mock" or "Krita: skipped", from `bridge.status`, with `bridge.mode` in `title`. `BRIDGE` also accepts the aliases `fp`, `first-party`, `ci` and `stub` (approved deviation 4). Icon + text, never colour alone. `unauthorized` uses the warning style, `down` the error style.
 
 ## AC hooks
 - `data-testid`: `activity-panel`, `activity-row`, `clip-requires`, `share-qr`, `share-hint-loopback`, `featured-strip`, `featured-edit`, `kra-source`, `bridge-badge`.
