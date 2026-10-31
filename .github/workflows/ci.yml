@@ -90,6 +90,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: ".nvmrc"
+          cache: npm
+      - name: Install (npm ci — lint:ci needs yaml)
+        run: npm ci
       - name: Install gitleaks, actionlint, shellcheck (pinned, fail-closed)
         run: |
           set -euo pipefail

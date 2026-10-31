@@ -29,5 +29,8 @@
     "lint:ci": "node scripts/lint-ci.mjs",
     "changelog": "node scripts/changelog.mjs"
   },
+  "devDependencies": {
+    "yaml": "2.9.1"
+  },
   "license": "MIT"
 }
