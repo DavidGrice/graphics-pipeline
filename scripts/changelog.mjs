@@ -5,7 +5,7 @@
  *   node scripts/changelog.mjs <from>..<to>     (or: <from> [to=HEAD])
  *
  * Commits in (from, to], oldest first, no merges, grouped by the lane tag in the subject:
- * E1, E2, E3 (a standalone `E1`/`E2`/`E3` token), then docs, test (subject type prefix), other.
+ * E1, E2, E3 (a standalone `E1`/`E2`/`E3` token, optional suffix `e1b` — S3-G CO-1), then docs, test (subject type prefix), other.
  * One line per commit: `- <short sha> <subject>`. Empty groups are omitted.
  *   exit 2  ERROR CHANGELOG_RANGE: a ref is missing, not a commit, or looks like an option.
  */
@@ -19,9 +19,11 @@ function fail(msg) {
   process.exit(2);
 }
 
-function laneOf(subject) {
-  const lane = subject.match(/(?:^|[\s(\[:/])(E[123])(?=$|[\s)\]:/,.])/);
-  if (lane) return lane[1];
+/** S3-G CO-1: `E1`..`E3` with an optional one-letter suffix (`e1b`, `E2a`), any case; `-` is a left
+ * boundary too (`s3f-e1b`). Never inside a word: `E10`, `E4`, `ae1`, `node22` don't match. */
+export function laneOf(subject) {
+  const lane = subject.match(/(?:^|[\s(\[:/-])(E[123])[a-z]?(?=$|[\s)\]:/,.])/i);
+  if (lane) return lane[1].toUpperCase();
   if (/^docs\b/i.test(subject)) return "docs";
   if (/^tests?\b/i.test(subject)) return "test";
   return "other";
@@ -44,7 +46,7 @@ function verify(ref) {
   return r.stdout.trim();
 }
 
-{
+if (import.meta.url === `file://${process.argv[1]}`) {
   const [fromRef, toRef] = parseRange(process.argv.slice(2));
   const from = verify(fromRef);
   const to = verify(toRef);
