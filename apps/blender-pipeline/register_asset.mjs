@@ -5,6 +5,7 @@
  *   node register_asset.mjs --id <uuid> --slug hero-billboard --glb path --preview path [--api http://127.0.0.1:8787]
  *   [--mode billboard|rigged]  (hint only — GLB probe wins for clips/rig)
  *   [--import-meta path.json]  (S2-D-E2 — include importMeta; probe still wins)
+ *   [--clip-requires path.json] (S3-F #11 — {clip: [required clips]}; checked against the probed clips)
  * Exit codes: 0 ok · 1 validation/POST failure · 2 bad MAX_GLB_MB or PROBE_CACHE (CONFIG_INVALID) · 4 GLB_TOO_LARGE · 5 GLB_CORRUPT
  */
 import fs from "node:fs";
@@ -16,7 +17,7 @@ import { assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_g
 import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
 import { buildTimings, readExportMs, writeTimings } from "./timings.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
-import { parseMaxGlbMb, maxGlbBytes } from "@graphics-pipeline/asset-schema";
+import { parseMaxGlbMb, maxGlbBytes, clipRequiresProblem, ClipRequiresSchema } from "@graphics-pipeline/asset-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -78,6 +79,8 @@ function sanitizeImportMeta(raw) {
   if (typeof raw.humanoidPngApproved === "boolean") {
     out.humanoidPngApproved = raw.humanoidPngApproved;
   }
+  // S3-F #47 — basename echo only; the API rejects separators / other extensions (VALIDATION)
+  if (typeof raw.sourceKra === "string") out.sourceKra = raw.sourceKra;
   if (!out.source) return null;
   return out;
 }
@@ -218,6 +221,36 @@ if (flag("weights") && !probed.hasWeights) {
   process.exit(1);
 }
 
+// S3-F #11 — clipRequires map vs the PROBED clips (probe wins); same codes as the API.
+let clipRequires;
+{
+  const crPath = arg("clip-requires", "");
+  if (crPath) {
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(path.resolve(crPath), "utf8"));
+    } catch {
+      console.error("ERROR VALIDATION: --clip-requires is not a readable JSON file");
+      process.exit(1);
+    }
+    const z = ClipRequiresSchema.safeParse(raw);
+    if (!z.success || !raw || typeof raw !== "object" || Array.isArray(raw)) {
+      console.error("ERROR VALIDATION: clipRequires must map clip → 1–8 unique clip names");
+      process.exit(1);
+    }
+    const p = clipRequiresProblem(probed.clips, raw);
+    if (p?.code === "CLIP_REQUIRES_MISSING") {
+      console.error(`ERROR CLIP_REQUIRES_MISSING: clipRequires["${p.clip}"] not in probed clips: ${p.missing.join(", ")}`);
+      process.exit(1);
+    }
+    if (p) {
+      console.error(`ERROR CLIP_REQUIRES_CYCLE: Circular requirement: ${p.cycle.join(" → ")}`);
+      process.exit(1);
+    }
+    clipRequires = raw;
+  }
+}
+
 const errs = validateProbed({
   stage,
   clips: probed.clips,
@@ -294,6 +327,7 @@ const body = {
   tags: ["sprint2d", stage],
   clips: probed.clips,
   clipDurations: probed.clipDurations,
+  ...(clipRequires ? { clipRequires } : {}),
   license: arg("license", "MIT"),
   formats: {
     glb: `assets/${id}/model.glb`,

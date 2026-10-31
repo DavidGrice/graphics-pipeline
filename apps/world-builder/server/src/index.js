@@ -16,9 +16,11 @@ import {
   suggestSlug,
   SCENE_MAX_NODES_DEFAULT,
   liveSceneNodes,
+  clipRequiresProblem,
 } from "@graphics-pipeline/asset-schema";
 import { createActivityLog, parseActivityLimit, parseActivityMaxLines } from "./activity.js";
 import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
+import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
 
 /**
  * S3-D #88 — normalise altText. Returns { value } (undefined = clear) or { error } envelope args.
@@ -133,6 +135,7 @@ let TRUST_PROXY;
 let SCENE_MAX_NODES;
 let ACTIVITY_MAX_LINES;
 let BRIDGE_MODE;
+let PUBLIC_BASE_URL;
 try {
   try {
     MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
@@ -147,6 +150,8 @@ try {
   ACTIVITY_MAX_LINES = parseActivityMaxLines(process.env.ACTIVITY_MAX_LINES);
   // S3-F #52 — BRIDGE validated at start (vendor | firstparty | mock)
   BRIDGE_MODE = parseBridgeMode(process.env.BRIDGE);
+  // S3-F #85 — share QR base (absolute http(s) origin) or null
+  PUBLIC_BASE_URL = parsePublicBaseUrl(process.env.PUBLIC_BASE_URL);
 } catch (err) {
   console.error(`[world-builder] FATAL ${err instanceof ConfigError ? err.message : "CONFIG_INVALID: startup config"}`);
   process.exit(1);
@@ -154,6 +159,20 @@ try {
 const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
 // S3-F #128 — append-only activity log under DATA_ROOT (gitignored); write failures never fail a request.
 const activity = createActivityLog({ dataRoot: DATA_ROOT, maxLines: ACTIVITY_MAX_LINES });
+// S3-F #140 — featured scene playlist (<DATA_ROOT>/featured.json, gitignored).
+const featured = createFeaturedStore({ dataRoot: DATA_ROOT });
+
+/** S3-F #11 — 400 CLIP_REQUIRES_MISSING {clip, missing} / CLIP_REQUIRES_CYCLE {cycle}; true if sent. */
+function sendClipRequiresError(res, doc) {
+  const p = clipRequiresProblem(doc.clips ?? [], doc.clipRequires);
+  if (!p) return false;
+  if (p.code === "CLIP_REQUIRES_MISSING") {
+    sendError(res, 400, p.code, `clipRequires["${p.clip}"]: not in probed clips: ${p.missing.join(", ")}`, { clip: p.clip, missing: p.missing });
+  } else {
+    sendError(res, 400, p.code, `Circular requirement: ${p.cycle.join(" → ")}`, { cycle: p.cycle });
+  }
+  return true;
+}
 
 const FORMAT_KEYS = ["glb", "fbx", "obj", "preview"];
 
@@ -335,6 +354,8 @@ app.get("/api/health", async (_req, res) => {
     ...(ok ? { dataRoot: DATA_ROOT } : {}),
     strictKrita: strict,
     bridge,
+    // S3-F #85 — share base for the client QR (null → client uses location.origin)
+    share: { baseUrl: PUBLIC_BASE_URL },
   });
 });
 
@@ -350,6 +371,44 @@ app.get("/api/activity", async (req, res) => {
       return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100", { field: "limit" });
     }
     res.json(await activity.read(limit));
+  } catch (err) {
+    sendInternal(req, res, err);
+  }
+});
+
+/** S3-F #140 — find a doc by id (Mongo or memory). */
+async function findAssetById(id) {
+  const col = collection();
+  return col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
+}
+
+/**
+ * S3-F #140 — GET /api/featured → {sceneIds, scenes: [{id, slug, title?}], stale?}. Deleted,
+ * tombstoned or non-scene ids are dropped from `scenes` and listed in `stale` (never 500 for that).
+ */
+app.get("/api/featured", async (req, res) => {
+  try {
+    const sceneIds = featured.read();
+    const scenes = [];
+    const stale = [];
+    for (const id of sceneIds) {
+      const d = await findAssetById(id);
+      if (!d || d.deleted === true || d.stage !== "scene") stale.push(id);
+      else scenes.push({ id: d.id, slug: d.slug, ...(d.name ? { title: d.name } : {}) });
+    }
+    res.json({ sceneIds, scenes, ...(stale.length ? { stale } : {}) });
+  } catch (err) {
+    sendInternal(req, res, err);
+  }
+});
+
+/** S3-F #140 — PUT /api/featured {sceneIds} (rate-limited by the mutation limiter). */
+app.put("/api/featured", async (req, res) => {
+  try {
+    const p = await featuredProblem(req.body, findAssetById);
+    if (p) return sendError(res, 400, "FEATURED_INVALID", p.error, { invalid: p.invalid, reason: p.reason });
+    featured.write(req.body.sceneIds);
+    res.json({ sceneIds: req.body.sceneIds });
   } catch (err) {
     sendInternal(req, res, err);
   }
@@ -517,6 +576,7 @@ app.post("/api/assets", async (req, res) => {
     const parsed = safeParseAsset(body);
     if (!parsed.success) return sendValidation(res, parsed);
     if (sendSceneCapError(res, body.scene)) return;
+    if (sendClipRequiresError(res, body)) return;
 
     const col = collection();
     // S3-D #127 — a slug owned by a different id → 409 SLUG_CLASH (same id re-register is idempotent)
@@ -627,6 +687,10 @@ app.patch("/api/assets/:id", async (req, res) => {
     if (body.clipTags !== undefined) {
       patch.clipTags = body.clipTags;
     }
+    // S3-F #11 — clipRequires map (null clears); checked against stored (probed) clips below
+    let clearClipRequires = false;
+    if (body.clipRequires === null) clearClipRequires = true;
+    else if (body.clipRequires !== undefined) patch.clipRequires = body.clipRequires;
     if (typeof body.characterType === "string") {
       patch.characterType = body.characterType;
     }
@@ -688,12 +752,14 @@ app.patch("/api/assets/:id", async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
     if (clearAltText) delete next.altText;
+    if (clearClipRequires) delete next.clipRequires;
 
     if (sendNodeFlagError(res, next.scene)) return;
     normaliseTombstones(next.scene);
     const parsed = safeParseAsset(next);
     if (!parsed.success) return sendValidation(res, parsed);
     if (sendSceneCapError(res, next.scene)) return;
+    if (sendClipRequiresError(res, next)) return;
 
     if (next.stage === "scene" && next.scene?.nodes) {
       const resolveDoc = async (idOrSlug) => {
@@ -730,7 +796,10 @@ app.patch("/api/assets/:id", async (req, res) => {
     }
 
     if (col) {
-      await col.updateOne({ id }, clearAltText ? { $set: next, $unset: { altText: "" } } : { $set: next });
+      {
+        const unset = { ...(clearAltText ? { altText: "" } : {}), ...(clearClipRequires ? { clipRequires: "" } : {}) };
+        await col.updateOne({ id }, Object.keys(unset).length ? { $set: next, $unset: unset } : { $set: next });
+      }
     } else {
       memoryAssets.set(id, next);
     }
