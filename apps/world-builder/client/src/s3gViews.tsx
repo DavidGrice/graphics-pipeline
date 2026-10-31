@@ -122,12 +122,14 @@ function CompareViewport({
   onStats,
 }: {
   side: "a" | "b";
-  asset: CompareAsset & { formats?: { glb?: string } };
+  asset: CompareAsset & { formats?: { glb?: string }; fileStatus?: number };
   sync: boolean;
   shared: React.MutableRefObject<{ a: any; b: any }>;
   onStats: (s: Stats) => void;
 }) {
-  const url = asset.formats?.glb ? `/api/assets/${asset.id}/file` : null;
+  const hasGlb = !!asset.formats?.glb;
+  const fileOk = hasGlb && (asset.fileStatus == null || (asset.fileStatus >= 200 && asset.fileStatus < 300));
+  const url = fileOk ? `/api/assets/${asset.id}/file` : null;
   const ctl = useRef<any>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -173,20 +175,27 @@ function CompareViewport({
           </ViewBoundary>
         </Canvas>
         </ViewBoundary>
-        {!url ? <p className="muted compare-nomesh">No GLB for this asset</p> : null}
+        {!hasGlb ? <p className="muted compare-nomesh">No GLB for this asset</p> : null}
+        {hasGlb && !fileOk ? (
+          <p className="err compare-nomesh" role="alert" data-testid="compare-load-error">
+            {asset.fileStatus === 404 ? "Model file not found (404)" : `Model file unavailable (${asset.fileStatus || "network error"})`}
+          </p>
+        ) : null}
         {url && loadErr ? <p className="err compare-nomesh" role="alert" data-testid="compare-load-error">Viewer error: {loadErr}</p> : null}
       </div>
     </div>
   );
 }
 
-async function headSize(id: string): Promise<number | undefined> {
+// NIT-G-3 — the HEAD also gates the GLB load: a missing file (404, e.g. the asset's file was purged)
+// never reaches useGLTF, so no thrown loader error / pageerror; the viewport shows an in-view error.
+async function headFile(id: string): Promise<{ size?: number; status: number }> {
   try {
     const r = await fetch(`/api/assets/${id}/file`, { method: "HEAD" });
     const n = Number(r.headers.get("content-length"));
-    return r.ok && Number.isFinite(n) && n > 0 ? n : undefined;
+    return { size: r.ok && Number.isFinite(n) && n > 0 ? n : undefined, status: r.status };
   } catch {
-    return undefined;
+    return { status: 0 };
   }
 }
 
@@ -210,7 +219,9 @@ export function CompareView({ search }: { search: string }) {
       if (r.status === 404) throw new Error(`Unknown asset id "${id}"`);
       if (!r.ok) throw new Error(`Could not load asset "${id}" (HTTP ${r.status})`);
       const j = await r.json();
-      return { ...j, sizeBytes: j.formats?.glb ? await headSize(j.id) : undefined };
+      if (!j.formats?.glb) return { ...j, sizeBytes: undefined };
+      const h = await headFile(j.id);
+      return { ...j, sizeBytes: h.size, fileStatus: h.status };
     };
     Promise.all([get(parsed.a), get(parsed.b)])
       .then(([a, b]) => alive && setPair({ a, b }))

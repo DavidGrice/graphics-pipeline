@@ -260,6 +260,13 @@ test("#84 browser: Compare… picker obeys NIT-F-1 at 390/1280/1920 (+resize); s
   const { chromium, exe, UI, API } = env;
   const fx = await fixtures(API, "c");
   if (!fx) return t.skip(`SKIP_NO_API: could not register fixtures on ${API}`);
+  // NIT-G-3 — this test owns its GLB files (written for its own fixture ids), so nothing another test
+  // purges can 404 under it; on an API that serves another data dir the viewports show the in-view error.
+  const glbDirs = [ROOT + "/data", process.env.WB_DATA_ROOT].filter(Boolean).flatMap((d) => [fx.ids.c1, fx.ids.c2].map((id) => path.join(d, "assets", id)));
+  for (const d of glbDirs) {
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "model.glb"), makeRiggedGlb({ bones: 2, clips: {} }));
+  }
   const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
   try {
     for (const [w, h] of [[390, 844], [1280, 800], [1920, 1080]]) {
@@ -345,6 +352,7 @@ test("#84 browser: Compare… picker obeys NIT-F-1 at 390/1280/1920 (+resize); s
   } finally {
     await br.close();
     await fx.cleanup();
+    glbDirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
   }
 });
 
@@ -595,6 +603,35 @@ test("#29 browser: help text names Shift+drag; a Shift+drag starting on a gizmo 
     assert.equal(await p.getByTestId("selection-count").count(), 0);
     assert.equal(await p.getByTestId("undo").getAttribute("title"), "Undo Move node", "the drag moved the node");
     assert.deepEqual(errs, []);
+    await p.close();
+  } finally {
+    await br.close();
+    await fx.cleanup();
+  }
+});
+
+test("NIT-G-3 browser: compare with a missing model file (404) shows an in-view error per side, no pageerror", async (t) => {
+  const env = browserEnv();
+  if (env.skip) return t.skip(env.skip);
+  const { chromium, exe, UI, API } = env;
+  const fx = await fixtures(API, "m"); // registered with formats.glb but no file on disk → /file 404
+  if (!fx) return t.skip(`SKIP_NO_API: could not register fixtures on ${API}`);
+  const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
+  try {
+    const p = await br.newPage({ viewport: { width: 1280, height: 800 } });
+    const errs = [];
+    p.on("pageerror", (e) => errs.push(String(e)));
+    await p.goto(`${UI.replace(/\/$/, "")}/?compare=${fx.ids.c1},${fx.ids.c2}`, { waitUntil: "networkidle" });
+    await p.getByTestId("compare-diff").waitFor({ timeout: 15000 });
+    for (const side of ["compare-left", "compare-right"]) {
+      const e = p.getByTestId(side).getByTestId("compare-load-error");
+      await e.waitFor({ timeout: 10000 });
+      assert.equal((await e.textContent()).trim(), "Model file not found (404)");
+      assert.equal(await e.getAttribute("role"), "alert");
+    }
+    await inViewAndHittable(p, "404 compare", '[data-testid="compare-sync"]', ['[data-testid="compare-back"]']);
+    await p.waitForTimeout(300);
+    assert.deepEqual(errs, [], "no pageerror on a 404 model file");
     await p.close();
   } finally {
     await br.close();
