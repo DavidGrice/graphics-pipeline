@@ -2,7 +2,7 @@
 
 **Cut:** Leader, Oct 30 (seed `/workspace/sprint3g-seed.md`, all 12 items) · **AC:** `/workspace/sprint3g-ac.md` (Tester)
 **Base:** `origin/dev` @ `c560e22` (S3-F #48), with **CO-0** (`yaml` devDependency + `npm ci` in the lint job) as the first pack commit; dev is fixed when 3-G merges · **Pack:** `enhancement/s3g-growth-t7` (one branch only)
-**IDs:** E1 CO-1 · CO-2 · 78 · 72 — E2 29 · 36 · 84 · 44 — E3 CO-3 · CO-4 · 150 · 151. **Tip1 = CO-1..CO-4.**
+**IDs:** E1 CO-1 · CO-2 · 78 · 72 — E2 29 · 36 · 84 · 44 — E3 CO-3 · CO-4 · 150 · 151. **Tip1 = CO-1..CO-5.** CO-5 (Leader): `ci.yml` gains a `pull_request` trigger for PRs into `dev`. Until then a `workflow_dispatch` run on the tip SHA is the live-CI gate.
 
 **Locks:**
 - Probe wins. No media in git. `BLENDER_BIN` fails closed. `assetSchemaVersion` stays **3**.
@@ -136,3 +136,10 @@
 - typecheck, build, `golden --check`, `lint:ci` (now with mermaid and `changelog:verify`), and `scan:secrets` are green.
 - The UI repeat run has no flips.
 - **The tip's live CI run is green** before the Tester calls FULL PASS.
+
+## Deviations (Leader-approved)
+- **E3-D1:** #150 uses pinned `mermaid` 12.2.0 `parse()` + `jsdom` 30.1.3 as devDependencies only; parse-only, no network (`@mermaid-js/parser` rejects flowcharts).
+- **E3-D2:** all 6 pre-existing mermaid blocks (AGENT_GUIDE.md + S2-C..S2-G D2) must stay linted, plus the 2 new #150 flowcharts.
+- **E3-D3:** with CO-5, a pack PR triggers push + pull_request runs; FULL PASS needs both green on the tip.
+- **E3-D4 (amended):** mermaid lint covers every git-tracked `*.md` in the repo (incl. root `AGENT_GUIDE.md`, `AGENTS.md`), not just `docs/`.
+- Earlier: VITE_PORT/WB_API_PORT env; playwright-core with runner Chrome; #148 test expects an S3-G section.
