@@ -8,9 +8,12 @@
  *   exit 2  ERROR CONFIG_INVALID: ACTIONLINT_BIN / SHELLCHECK_BIN is set but missing, not a file or not
  *           executable (S3-F CO-2; names the variable, never the path; checked before anything runs)
  * ACTIONLINT_BIN / SHELLCHECK_BIN override PATH lookup; unset + not on PATH → SKIP_PLATFORM.
+ * S3-F #106 — also parses .github/dependabot.yml and checks its shape (groups, dev target, major
+ * ignore); a bad file → `ERROR LINT_FAILED: dependabot` (+ one `dependabot: <problem>` line each), exit 1.
  */
 import { spawnSync } from "node:child_process";
 import { overrideProblem, resolveTool } from "./tool-bin.mjs";
+import { checkDependabotFile } from "./dependabot-check.mjs";
 
 for (const v of ["ACTIONLINT_BIN", "SHELLCHECK_BIN"]) {
   const why = overrideProblem(process.env[v] || "");
@@ -48,5 +51,17 @@ const ls = spawnSync("git", ["ls-files", "-z", "--", "*.sh"], { cwd, encoding: "
 const files = ls.status === 0 ? ls.stdout.split("\0").filter(Boolean) : [];
 if (files.length) run("shellcheck", process.env.SHELLCHECK_BIN, ["-S", "warning", "--", ...files]); // R1 #107: severity ≥ warning fails
 else console.log("OK shellcheck (no tracked *.sh)");
+
+// S3-F #106 — dependabot.yml YAML + shape (no external tool needed, never skipped)
+{
+  const problems = checkDependabotFile(cwd);
+  if (problems.length) {
+    for (const p of problems) console.error(`dependabot: ${p}`);
+    console.error("ERROR LINT_FAILED: dependabot");
+    failed++;
+  } else {
+    console.log("OK dependabot");
+  }
+}
 
 process.exit(failed ? 1 : 0);
