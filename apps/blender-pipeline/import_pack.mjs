@@ -147,7 +147,8 @@ for (const meta of pack.assets || []) {
     }
     const res = await fetch(`${api}/api/assets`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // S3-F #128 — logged as kind "pack.import" in the activity feed
+      headers: { "Content-Type": "application/json", "X-Activity-Kind": "pack.import" },
       body: JSON.stringify(body),
     });
     const text = await res.text();

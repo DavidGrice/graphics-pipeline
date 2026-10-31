@@ -17,6 +17,8 @@ import {
   SCENE_MAX_NODES_DEFAULT,
   liveSceneNodes,
 } from "@graphics-pipeline/asset-schema";
+import { createActivityLog, parseActivityLimit, parseActivityMaxLines } from "./activity.js";
+import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
 
 /**
  * S3-D #88 — normalise altText. Returns { value } (undefined = clear) or { error } envelope args.
@@ -129,6 +131,8 @@ let RATE_LIMIT_PER_MIN;
 let CORS_ORIGINS;
 let TRUST_PROXY;
 let SCENE_MAX_NODES;
+let ACTIVITY_MAX_LINES;
+let BRIDGE_MODE;
 try {
   try {
     MAX_GLB_MB = parseMaxGlbMb(process.env.MAX_GLB_MB);
@@ -139,11 +143,17 @@ try {
   CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGINS);
   TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
   SCENE_MAX_NODES = parseSceneMaxNodes(process.env.SCENE_MAX_NODES, SCENE_MAX_NODES_DEFAULT);
+  // S3-F #128 — test-only cap override (default 10,000)
+  ACTIVITY_MAX_LINES = parseActivityMaxLines(process.env.ACTIVITY_MAX_LINES);
+  // S3-F #52 — BRIDGE validated at start (vendor | firstparty | mock)
+  BRIDGE_MODE = parseBridgeMode(process.env.BRIDGE);
 } catch (err) {
   console.error(`[world-builder] FATAL ${err instanceof ConfigError ? err.message : "CONFIG_INVALID: startup config"}`);
   process.exit(1);
 }
 const MAX_GLB_BYTES = maxGlbBytes(MAX_GLB_MB);
+// S3-F #128 — append-only activity log under DATA_ROOT (gitignored); write failures never fail a request.
+const activity = createActivityLog({ dataRoot: DATA_ROOT, maxLines: ACTIVITY_MAX_LINES });
 
 const FORMAT_KEYS = ["glb", "fbx", "obj", "preview"];
 
@@ -288,45 +298,13 @@ app.use((err, _req, res, next) => {
 app.use("/data", express.static(DATA_ROOT));
 
 app.get("/api/health", async (_req, res) => {
-  /** @type {{ ok: boolean, status: string, detail?: string, error?: string, port?: number }} */
-  let krita = { ok: false, status: "unchecked" };
   const strict =
     process.env.HEALTH_STRICT_KRITA === "1" || process.env.SMOKE_LIVE === "1";
-  const bridgeMode = (process.env.BRIDGE || "").toLowerCase();
-  const skip =
-    process.env.KRITA_HEALTH_MODE === "off" ||
-    process.env.SKIP_KRITA_HEALTH === "1" ||
-    bridgeMode === "mock";
-  if (!skip) {
-    try {
-      const port = Number(process.env.KRITA_MCP_PORT || 9797);
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1500);
-      const r = await fetch(`http://127.0.0.1:${port}/`, {
-        method: "GET",
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      krita = {
-        ok: true,
-        status: "running",
-        port,
-        detail: `bridge HTTP ${r.status}`,
-      };
-    } catch (err) {
-      krita = {
-        ok: false,
-        status: "down",
-        port: Number(process.env.KRITA_MCP_PORT || 9797),
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  } else {
-    krita = {
-      ok: true,
-      status: bridgeMode === "mock" ? "mock" : "skipped",
-    };
-  }
+  const skip = process.env.KRITA_HEALTH_MODE === "off" || process.env.SKIP_KRITA_HEALTH === "1";
+  // S3-F #52 — bridge {mode, status[, httpStatus]}; 401/403 = unauthorized, never "down"
+  const probed = await probeBridge({ mode: BRIDGE_MODE, skip });
+  const bridge = { mode: probed.mode, status: probed.status, ...(probed.httpStatus != null ? { httpStatus: probed.httpStatus } : {}) };
+  const krita = legacyKrita(probed);
 
   // S3-A #103 — tool version badge (null when missing; API still ok)
   const tools = await probeToolVersions();
@@ -339,8 +317,14 @@ app.get("/api/health", async (_req, res) => {
     : Object.fromEntries(
         Object.entries(tools).map(([k, v]) => [k, v ? { version: v.version } : null]),
       );
+  // strict only: down → KRITA_DOWN, unauthorized → KRITA_UNAUTHORIZED (both 503)
+  const failCode = bridge.status === "unauthorized" ? "KRITA_UNAUTHORIZED" : "KRITA_DOWN";
+  const failText =
+    failCode === "KRITA_UNAUTHORIZED"
+      ? "strict Krita health check: bridge unauthorized (401/403)"
+      : "strict Krita health check failed";
   res.status(status).json({
-    ...(ok ? {} : { code: "KRITA_DOWN", error: "strict Krita health check failed" }),
+    ...(ok ? {} : { code: failCode, error: failText }),
     ok,
     mongo: Boolean(db),
     krita,
@@ -350,8 +334,25 @@ app.get("/api/health", async (_req, res) => {
     limits: { sceneMaxNodes: SCENE_MAX_NODES },
     ...(ok ? { dataRoot: DATA_ROOT } : {}),
     strictKrita: strict,
-    ...(bridgeMode === "mock" ? { bridge: "mock" } : {}),
+    bridge,
   });
+});
+
+/**
+ * S3-F #128 (D2) — GET /api/activity?limit= (default 20, integer 1..100, else 400 VALIDATION
+ * {field: "limit"}). Newest-first `{items: [{at, kind, id, slug?}], total}` (current file, then
+ * activity.1.jsonl). GET → not rate-limited.
+ */
+app.get("/api/activity", async (req, res) => {
+  try {
+    const limit = parseActivityLimit(req.query.limit);
+    if (limit === null) {
+      return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100", { field: "limit" });
+    }
+    res.json(await activity.read(limit));
+  } catch (err) {
+    sendInternal(req, res, err);
+  }
 });
 
 app.get("/api/assets", async (req, res) => {
@@ -583,6 +584,9 @@ app.post("/api/assets", async (req, res) => {
     } else {
       memoryAssets.set(body.id, body);
     }
+    // S3-F #128 — import_pack marks its POSTs (pack.import); scenes log scene.save, else asset.register.
+    const importHeader = String(req.get("x-activity-kind") || "").toLowerCase() === "pack.import";
+    void activity.record(importHeader ? "pack.import" : body.stage === "scene" ? "scene.save" : "asset.register", body);
     res.status(201).json(body);
   } catch (err) {
     sendInternal(req, res, err);
@@ -730,6 +734,15 @@ app.patch("/api/assets/:id", async (req, res) => {
     } else {
       memoryAssets.set(id, next);
     }
+    // S3-F #128 — scene graph PATCH: scene.purge when tombstones were removed, else scene.save;
+    // any other PATCH (alt text, actionMap, tags, …) is asset.patch.
+    if (next.stage === "scene" && Object.prototype.hasOwnProperty.call(body, "scene")) {
+      const nextIds = new Set((next.scene?.nodes ?? []).map((n) => n?.id));
+      const purged = (existing.scene?.nodes ?? []).some((n) => n?.deleted === true && !nextIds.has(n.id));
+      void activity.record(purged ? "scene.purge" : "scene.save", next);
+    } else {
+      void activity.record("asset.patch", next);
+    }
     res.json(next);
   } catch (err) {
     sendInternal(req, res, err);
@@ -776,6 +789,7 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
     } else {
       memoryAssets.set(id, next);
     }
+    void activity.record("asset.patch", next); // S3-F #128
     res.json(next);
   } catch (err) {
     sendInternal(req, res, err);
@@ -817,6 +831,7 @@ app.delete("/api/assets/:id", async (req, res) => {
     }
     if (col) await col.deleteOne({ id });
     else memoryAssets.delete(id);
+    void activity.record("asset.delete", existing);
     res.status(204).end();
   } catch (err) {
     sendInternal(req, res, err);
