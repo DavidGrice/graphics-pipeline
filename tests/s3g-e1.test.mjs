@@ -197,7 +197,8 @@ function memActivity() {
   const items = [];
   return { items, record: (kind, f) => items.push({ kind, ...f }) };
 }
-const SECRET = "0123456789abcdef-secret";
+// fake value lives under tests/fixtures/ (gitleaks allowlist); never a real secret
+const SECRET = fs.readFileSync(path.join(ROOT, "tests/fixtures/s3g-webhook-secret.txt"), "utf8").trim();
 
 test("#72 happy path to a local server under the allow flags: JSON {event,id,slug,at}, valid HMAC, no paths", async () => {
   const got = [];
