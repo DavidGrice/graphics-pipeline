@@ -84,6 +84,7 @@ import {
   moveBy,
   pruneSel,
   pushCoalesced,
+  reloadKeepsHistory,
   redo as redoStep,
   redoTitle,
   restoreCapText,
@@ -528,6 +529,22 @@ function GltfPlayer({
 
 
 /** S2-F / S3-A/B — scene child + translate/rotate/scale gizmo + snap + visibility. */
+/** S3-G #29 — mounted TransformControls; a Shift+drag that starts on a hovered/dragging handle stays a gizmo drag. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const liveGizmos = new Set<any>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function useGizmoRegistry(ref: { current: any }, deps: unknown[]) {
+  useEffect(() => {
+    const c = ref.current;
+    if (c) liveGizmos.add(c);
+    return () => {
+      if (c) liveGizmos.delete(c);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+const gizmoHot = (): boolean => [...liveGizmos].some((g) => g && (g.dragging || (g.axis !== null && g.axis !== undefined)));
+
 function snapScalar(v: number, step: number): number {
   const s = Number.isFinite(step) && step > 0 ? step : 0.25;
   return Math.round(v / s) * s;
@@ -579,6 +596,9 @@ function SceneNodeModel({
   const rot = transform?.rotation ?? ([0, 0, 0] as [number, number, number]);
   const scl = transform?.scale ?? ([1, 1, 1] as [number, number, number]);
   const showGizmo = Boolean(selected && visible !== false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tcRef = useRef<any>(null);
+  useGizmoRegistry(tcRef, [showGizmo, groupObj]);
 
   useEffect(() => {
     const m = new THREE.AnimationMixer(clone);
@@ -628,6 +648,7 @@ function SceneNodeModel({
       </group>
       {showGizmo && groupObj ? (
         <TransformControls
+          ref={tcRef}
           object={groupObj}
           mode={gizmoMode}
           onMouseUp={() => {
@@ -678,6 +699,9 @@ function SceneNodeModel({
 /** S3-G #29 — one translate gizmo on the selection centroid; commits a shared delta on gesture end. */
 function MultiGizmo({ at, onCommit }: { at: [number, number, number]; onCommit: (d: [number, number, number]) => void }) {
   const [g, setG] = useState<THREE.Group | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tcRef = useRef<any>(null);
+  useGizmoRegistry(tcRef, [g]);
   useEffect(() => {
     g?.position.set(...at);
   }, [g, at[0], at[1], at[2]]);
@@ -686,6 +710,7 @@ function MultiGizmo({ at, onCommit }: { at: [number, number, number]; onCommit: 
       <group ref={setG} position={at} />
       {g ? (
         <TransformControls
+          ref={tcRef}
           object={g}
           mode="translate"
           onMouseUp={() => {
@@ -888,6 +913,7 @@ export function App() {
   // S3-G #36 — client-only undo/redo (cap 100); the save marker drives the dirty state
   const [hist, setHist] = useState<History<{ nodes: SceneNodeDraft[]; rootId: string | undefined }>>(() => emptyHistory());
   const histFor = useRef<string | null>(null);
+  const draftRef = useRef<{ nodes: SceneNodeDraft[]; rootId: string | undefined }>({ nodes: [], rootId: undefined });
   // S3-G #29 — multi-select (ids; tombstones may be selected for a batch Restore)
   const [multiSel, setMultiSel] = useState<string[]>([]);
   const [batchToast, setBatchToast] = useState<string | null>(null);
@@ -1327,6 +1353,19 @@ export function App() {
               scale: [1, 1, 1] as [number, number, number],
             },
       }));
+      // S3-G #36 (Leader ruling) — a server reload that would REPLACE the draft clears the undo/redo
+      // stack and resets the save marker; a reload that leaves the draft untouched (same scene, same
+      // nodes — e.g. our own Save echo or a list refresh) keeps history and the draft as-is.
+      const keep = reloadKeepsHistory(
+        histFor.current === selected.id,
+        normalizeSceneSnapshot(draftRef.current.nodes, draftRef.current.rootId),
+        normalizeSceneSnapshot(nodes, selected.scene?.rootId ?? nodes[0]?.id),
+      );
+      if (!keep) {
+      histFor.current = selected.id;
+      setHist(emptyHistory());
+      setMultiSel([]);
+      setBatchToast(null);
       setSceneDraft(nodes as SceneNodeDraft[]);
       setViewDraft(resolveSceneView(selected.scene?.view));
       setCamerasDraft((selected.scene?.cameras ?? []).map((c) => ({ ...c })));
@@ -1338,6 +1377,7 @@ export function App() {
       setReplaceUndo(null);
       setReplaceOpen(false);
       setPurgeConfirm(false);
+      }
     } else {
       setSceneDraft([]);
       setCamerasDraft([]);
@@ -1346,8 +1386,8 @@ export function App() {
       setSceneSaveError(null);
     }
     setSceneAppliedFor(selected?.id ?? null);
-    // S3-G #36 — a reload or scene switch clears the stack; a Save (same id, new scene) keeps it
-    if (histFor.current !== (selected?.id ?? null)) {
+    // non-scene selection: a switch clears the stack
+    if (selected.stage !== "scene" && histFor.current !== (selected?.id ?? null)) {
       histFor.current = selected?.id ?? null;
       setHist(emptyHistory());
       setMultiSel([]);
@@ -1501,6 +1541,7 @@ export function App() {
   const onCanvasPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (!isScene || !e.shiftKey || e.button !== 0) return;
     if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+    if (gizmoHot()) return; // on a gizmo handle → gizmo drag, never a box
     if (controlsRef.current) controlsRef.current.enabled = false;
     const r = e.currentTarget.getBoundingClientRect();
     boxStart.current = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -1534,6 +1575,7 @@ export function App() {
     setMultiSel(ids);
     if (ids.length === 1) setSceneNodeId(ids[0]);
   };
+  draftRef.current = { nodes: sceneDraft, rootId: sceneRootId };
   const keysRef = useRef({ undo: doUndo, redo: doRedo, nodes: sceneDraft });
   keysRef.current = { undo: doUndo, redo: doRedo, nodes: sceneDraft };
   useEffect(() => {
@@ -3094,6 +3136,9 @@ export function App() {
                 ) : null}
               </div>
             )}
+            <p className="muted canvas-help" data-testid="canvas-help">
+              Drag to orbit · Shift+drag to box-select · Shift-click rows to multi-select · Ctrl/Cmd+Z undo
+            </p>
             <ul className="scene-node-list">
               {sceneDraft.map((n) => {
                 if (isTombstone(n)) {

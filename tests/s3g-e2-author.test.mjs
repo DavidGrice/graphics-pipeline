@@ -267,3 +267,15 @@ test("D2 activity labels: inbox.sweep / webhook.refused / webhook.failed; unknow
   assert.equal(A.systemActivityLabel({ at, kind: "other.kind", id: "x" }), null, "with an id it stays an asset row (raw verb)");
   assert.equal(A.activityVerb("other.kind"), "other.kind");
 });
+
+test("#36 ruling: a reload that replaces the draft resets stack + marker (old snapshots unreachable); an untouched reload keeps history", () => {
+  assert.equal(G.reloadKeepsHistory(true, "A", "A"), true, "same scene, draft untouched → keep");
+  assert.equal(G.reloadKeepsHistory(true, "A", "B"), false, "server changed → replace + reset");
+  assert.equal(G.reloadKeepsHistory(false, "A", "A"), false, "scene switch → reset");
+  // after a reset nothing old can be applied and the fresh state is clean
+  const h = G.emptyHistory();
+  assert.equal(G.undo(h), null);
+  assert.equal(G.redo(h), null);
+  assert.equal(G.isDirty(h), false);
+  assert.equal(h.marker, 0);
+});

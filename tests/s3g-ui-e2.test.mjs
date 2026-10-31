@@ -8,7 +8,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { browserEnv, CHROME_ARGS, billboardBody, runId } from "./helpers/s3d-synth.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import { ROOT, browserEnv, CHROME_ARGS, billboardBody, makeRiggedGlb, runId } from "./helpers/s3d-synth.mjs";
 
 const json = { "Content-Type": "application/json" };
 const tf = (x) => ({ position: [x, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
@@ -454,5 +456,143 @@ test("D2 browser: id-less activity rows are muted plain text (no link) with rela
     await p.close();
   } finally {
     await br.close();
+  }
+});
+
+async function registerViaUi(p, body) {
+  const ta = p.getByLabel("Asset JSON");
+  if (!(await ta.count())) await p.getByRole("button", { name: "Register asset" }).click();
+  await ta.fill(JSON.stringify(body));
+  await p.getByTestId("register-submit").click();
+  await p.getByLabel("Asset JSON").waitFor({ state: "detached", timeout: 10000 });
+}
+
+test("#36 ruling browser: stale-undo probe — Save, server-side delete, refresh reload → Undo can't revive/touch nodes; Unsaved accurate; scene switch resets", async (t) => {
+  const env = browserEnv();
+  if (env.skip) return t.skip(env.skip);
+  const { chromium, exe, UI, API } = env;
+  const fx = await fixtures(API, "d");
+  if (!fx) return t.skip(`SKIP_NO_API: could not register fixtures on ${API}`);
+  const extra = [runId("s3g-d-r1"), runId("s3g-d-r2")];
+  const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
+  try {
+    const p = await br.newPage({ viewport: { width: 1280, height: 800 } });
+    const errs = [];
+    p.on("pageerror", (e) => errs.push(String(e)));
+    await p.goto(UI, { waitUntil: "networkidle" });
+    await p.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
+    await sceneReady(p);
+    await p.getByTestId("node-count").waitFor({ timeout: 10000 });
+    const undo = p.getByTestId("undo");
+    // edit + Save: stack survives with the marker on it
+    await p.getByTestId("node-row-n2").click();
+    await p.getByTestId("node-delete-n2").click();
+    await p.getByTestId("scene-save").click();
+    await p.waitForFunction(() => document.querySelector('[data-testid="scene-save"]')?.textContent === "Saved", null, { timeout: 10000 });
+    assert.equal(await undo.isDisabled(), false);
+    // a list refresh that leaves the draft untouched must not touch history
+    await registerViaUi(p, billboardBody(extra[0], `s3gui-d-r1-${process.pid}`));
+    assert.equal(await undo.isDisabled(), false, "untouched reload keeps the stack");
+    assert.equal(await p.getByTestId("dirty-indicator").count(), 0);
+    // second "page": hard-remove n1 on the server
+    const cur = await (await fetch(`${API}/api/assets/${fx.ids.sid}`)).json();
+    const pr = await fetch(`${API}/api/assets/${fx.ids.sid}`, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({ scene: { ...cur.scene, nodes: cur.scene.nodes.filter((n) => n.id !== "n1") } }),
+    });
+    assert.equal(pr.status, 200, await pr.text());
+    // refresh that reloads the scene → draft replaced, stack + marker reset
+    await registerViaUi(p, billboardBody(extra[1], `s3gui-d-r2-${process.pid}`));
+    await p.waitForFunction(() => !document.querySelector('[data-testid="node-row-n1"]'), null, { timeout: 10000 });
+    assert.equal(await undo.isDisabled(), true, "stack cleared by the replacing reload");
+    assert.equal(await p.getByTestId("redo").isDisabled(), true);
+    const before = await count(p);
+    await p.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+    await p.keyboard.press("Control+z");
+    await undo.click({ force: true }).catch(() => {});
+    assert.equal(await count(p), before, "Undo is a no-op");
+    assert.equal(await p.getByTestId("node-row-n1").count(), 0, "deleted node not revived");
+    assert.equal(await p.getByTestId("node-row-deleted-n2").count(), 1, "saved delete not undone (still a tombstone)");
+    assert.equal(await p.getByTestId("dirty-indicator").count(), 0, "draft == server → not Unsaved");
+    const srv = await (await fetch(`${API}/api/assets/${fx.ids.sid}`)).json();
+    assert.equal(before, `Nodes ${srv.scene.nodes.filter((n) => !n.deleted).length} / 256`, "UI matches the server scene");
+    // scene switch with unsaved edits resets too
+    await p.getByTestId("node-row-n0").click();
+    await p.getByTestId("node-add").click();
+    assert.equal(await p.getByTestId("dirty-indicator").count(), 1);
+    await p.getByRole("button", { name: new RegExp(fx.slugs.c1) }).first().click();
+    await p.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
+    await sceneReady(p);
+    assert.equal(await undo.isDisabled(), true, "scene switch clears the stack");
+    assert.equal(await p.getByTestId("dirty-indicator").count(), 0);
+    assert.equal(await count(p), before);
+    assert.deepEqual(errs, []);
+    await p.close();
+  } finally {
+    await br.close();
+    for (const id of extra) await fetch(`${API}/api/assets/${id}`, { method: "DELETE" }).catch(() => {});
+    await fx.cleanup();
+  }
+});
+
+test("#29 browser: help text names Shift+drag; a Shift+drag starting on a gizmo handle stays a gizmo drag (no box)", async (t) => {
+  const env = browserEnv();
+  if (env.skip) return t.skip(env.skip);
+  const { chromium, exe, UI, API } = env;
+  // the gizmo only mounts on a loadable GLB child: drop a synthetic one where a same-checkout API serves it
+  const gid = runId("s3g-e-glb");
+  const dirs = [ROOT + "/data", process.env.WB_DATA_ROOT].filter(Boolean).map((d) => path.join(d, "assets", gid));
+  for (const d of dirs) {
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "model.glb"), makeRiggedGlb({ bones: 2, clips: {} }));
+  }
+  const gslug = `s3gui-e-glb-${process.pid}`;
+  const sid = runId("s3g-e-scene");
+  const post = (b) => fetch(`${API}/api/assets`, { method: "POST", headers: json, body: JSON.stringify(b) }).then((r) => r.status, () => 0);
+  const rmDirs = () => dirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
+  const fx = {
+    slugs: { scene: `s3gui-e-scene-${process.pid}` },
+    cleanup: async () => {
+      for (const id of [sid, gid]) await fetch(`${API}/api/assets/${id}`, { method: "DELETE" }).catch(() => {});
+      rmDirs();
+    },
+  };
+  const served = (await post(billboardBody(gid, gslug))) === 201 && (await fetch(`${API}/api/assets/${gid}/file`)).status === 200;
+  const sceneOk = served && (await post({ ...billboardBody(sid, fx.slugs.scene), characterType: "unknown", stage: "scene",
+    scene: { version: 1, rootId: "n0", nodes: [{ id: "n0", assetId: gid, transform: tf(-3) }, { id: "n1", assetId: gid, transform: tf(0) }] } })) === 201;
+  if (!sceneOk) {
+    await fx.cleanup();
+    return t.skip(`SKIP_NO_API: ${API} did not register/serve a GLB from this checkout's data dir`);
+  }
+  const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
+  try {
+    const p = await br.newPage({ viewport: { width: 1280, height: 800 } });
+    const errs = [];
+    p.on("pageerror", (e) => errs.push(String(e)));
+    await p.goto(UI, { waitUntil: "networkidle" });
+    await p.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
+    await sceneReady(p);
+    await p.waitForTimeout(500); // GLB + gizmo mount after preflight
+    assert.match(await text(p, "canvas-help"), /Shift\+drag to box-select/);
+    await p.getByTestId("node-row-n1").click(); // n1 sits at the origin = orbit target = canvas centre
+    const c = await p.getByTestId("viewer-canvas").boundingBox();
+    const cx = c.x + c.width / 2, cy = c.y + c.height / 2;
+    await p.mouse.move(cx + 3, cy + 3);
+    await p.mouse.move(cx, cy, { steps: 3 }); // hover → the gizmo picks a handle
+    await p.keyboard.down("Shift");
+    await p.mouse.down();
+    await p.mouse.move(cx + 60, cy + 10, { steps: 6 });
+    const boxDuring = await p.getByTestId("select-box").count();
+    await p.mouse.up();
+    await p.keyboard.up("Shift");
+    assert.equal(boxDuring, 0, "no selection box from a gizmo handle");
+    assert.equal(await p.getByTestId("selection-count").count(), 0);
+    assert.equal(await p.getByTestId("undo").getAttribute("title"), "Undo Move node", "the drag moved the node");
+    assert.deepEqual(errs, []);
+    await p.close();
+  } finally {
+    await br.close();
+    await fx.cleanup();
   }
 });

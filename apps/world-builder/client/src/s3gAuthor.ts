@@ -42,6 +42,12 @@ export function pushCoalesced<T>(h: History<T>, step: Step<T>, cap = UNDO_CAP): 
   }
   return pushStep(h, step, cap);
 }
+/**
+ * Leader ruling: a server reload keeps history only when it is the same scene AND would leave the
+ * draft untouched; otherwise the draft is replaced and the stack + marker reset (emptyHistory()).
+ */
+export const reloadKeepsHistory = (sameScene: boolean, draftSnap: string, serverSnap: string): boolean =>
+  sameScene && draftSnap === serverSnap;
 export const canUndo = (h: History<unknown>) => h.index > 0;
 export const canRedo = (h: History<unknown>) => h.index < h.steps.length;
 export function undo<T>(h: History<T>): { history: History<T>; state: T; label: string } | null {
