@@ -123,6 +123,7 @@ for (const meta of pack.assets || []) {
       license: meta.license,
       importMeta: meta.importMeta,
       clipTags: meta.clipTags,
+      clipRequires: meta.clipRequires, // S3-F #11 (API re-checks against the probed clips)
       clipUx: meta.clipUx,
       scene: meta.scene,
       formats: {

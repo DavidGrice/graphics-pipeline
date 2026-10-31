@@ -47,6 +47,9 @@ data/cache/
 # S3-F #128 — activity feed (DATA_ROOT/activity.jsonl + one rotated generation), never committed
 data/activity.jsonl
 data/activity.1.jsonl
+# S3-F #140 — featured scene playlist (+ atomic-write tmp files)
+data/featured.json
+data/featured.json.*.tmp
 # S3-F #110 — pipeline.sh --gltf-separate debug output (<name>.gltf-debug/ beside the GLB)
 *.gltf-debug/
 
