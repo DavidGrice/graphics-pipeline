@@ -10,6 +10,7 @@
  * ACTIONLINT_BIN / SHELLCHECK_BIN override PATH lookup; unset + not on PATH → SKIP_PLATFORM.
  * S3-F #106 — also parses .github/dependabot.yml and checks its shape (groups, dev target, major
  * ignore); a bad file → `ERROR LINT_FAILED: dependabot` (+ one `dependabot: <problem>` line each), exit 1.
+ * S3-G E3 #150 — parses every ```mermaid block under docs/ (scripts/mermaid-lint.mjs; LINT_FAILED exit 1).
  * S3-G CO-2 — then runs scripts/changelog-verify.mjs (LINT_FAILED exit 1 on a sprint mismatch).
  */
 import { spawnSync } from "node:child_process";
@@ -71,6 +72,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 if (fs.existsSync(path.join(cwd, "docs/contract-changelog.md")) && fs.existsSync(path.join(cwd, "docs/error-codes.md"))) {
   const r = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "changelog-verify.mjs")], { cwd, encoding: "utf8" });
+  if (r.stdout) process.stdout.write(r.stdout);
+  if (r.stderr) process.stderr.write(r.stderr);
+  if (r.status !== 0) failed++;
+}
+
+// S3-G E3 #150 — mermaid blocks in docs/ (pinned `mermaid` devDependency; needs npm ci)
+if (fs.existsSync(path.join(cwd, "docs"))) {
+  const r = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "mermaid-lint.mjs")], { cwd, encoding: "utf8" });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
   if (r.status !== 0) failed++;
