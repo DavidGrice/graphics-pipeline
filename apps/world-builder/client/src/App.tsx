@@ -5,7 +5,7 @@
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
 import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
@@ -59,7 +59,7 @@ import {
   wireNode,
   type ReplaceUndo,
 } from "./s3eScene";
-import { activityVerb, bridgeBadge, type ActivityItem, type BridgeInfo } from "./s3fActivity";
+import { activityVerb, bridgeBadge, systemActivityLabel, type ActivityItem, type BridgeInfo } from "./s3fActivity";
 import {
   clipRequiresIssue,
   isLoopbackUrl,
@@ -71,6 +71,32 @@ import {
   type ClipRequiresErr,
 } from "./s3fShare";
 import { drawQr } from "./s3fQr";
+// S3-G E2 — #36 undo/redo, #29 multi-select, #84 compare entry, #44 health nav
+import {
+  batchApply,
+  boxSelect,
+  canRedo,
+  canUndo,
+  centroid,
+  emptyHistory,
+  historyKey,
+  isDirty,
+  moveBy,
+  pruneSel,
+  pushCoalesced,
+  redo as redoStep,
+  redoTitle,
+  restoreCapText,
+  selectAllLive,
+  selectionLabel,
+  skipToast,
+  toggleSel,
+  undo as undoStep,
+  undoTitle,
+  type BatchOp,
+  type History,
+} from "./s3gAuthor";
+import { navigate, NavLink, useOverlayPlacement } from "./s3gViews";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -649,6 +675,29 @@ function SceneNodeModel({
 }
 
 
+/** S3-G #29 — one translate gizmo on the selection centroid; commits a shared delta on gesture end. */
+function MultiGizmo({ at, onCommit }: { at: [number, number, number]; onCommit: (d: [number, number, number]) => void }) {
+  const [g, setG] = useState<THREE.Group | null>(null);
+  useEffect(() => {
+    g?.position.set(...at);
+  }, [g, at[0], at[1], at[2]]);
+  return (
+    <>
+      <group ref={setG} position={at} />
+      {g ? (
+        <TransformControls
+          object={g}
+          mode="translate"
+          onMouseUp={() => {
+            const d: [number, number, number] = [g.position.x - at[0], g.position.y - at[1], g.position.z - at[2]];
+            if (d.some((x) => Math.abs(x) > 1e-9)) onCommit(d);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function SceneNodeMissing({
   transform,
   label,
@@ -836,6 +885,19 @@ export function App() {
   const [sceneRootId, setSceneRootId] = useState<string | undefined>(undefined);
   const [sceneSaveError, setSceneSaveError] = useState<string | null>(null);
   const [sceneSaving, setSceneSaving] = useState(false);
+  // S3-G #36 — client-only undo/redo (cap 100); the save marker drives the dirty state
+  const [hist, setHist] = useState<History<{ nodes: SceneNodeDraft[]; rootId: string | undefined }>>(() => emptyHistory());
+  const histFor = useRef<string | null>(null);
+  // S3-G #29 — multi-select (ids; tombstones may be selected for a batch Restore)
+  const [multiSel, setMultiSel] = useState<string[]>([]);
+  const [batchToast, setBatchToast] = useState<string | null>(null);
+  const [selBox, setSelBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // S3-G #84 — "Compare…" picker (NIT-F-1 placement)
+  const [cmpOpen, setCmpOpen] = useState(false);
+  const [cmpQuery, setCmpQuery] = useState("");
+  const cmpBtnRef = useRef<HTMLButtonElement | null>(null);
+  const cmpPopRef = useRef<HTMLDivElement | null>(null);
+  const cmpPos = useOverlayPlacement(cmpOpen, cmpBtnRef, cmpPopRef, cmpQuery);
   // S3-E #38/#41/#35 — cap (from /api/health limits), deleted-row toggle, purge confirm, replace
   const [sceneMaxNodes, setSceneMaxNodes] = useState(SCENE_MAX_NODES_DEFAULT);
   const [showDeleted, setShowDeleted] = useState(true);
@@ -1284,6 +1346,13 @@ export function App() {
       setSceneSaveError(null);
     }
     setSceneAppliedFor(selected?.id ?? null);
+    // S3-G #36 — a reload or scene switch clears the stack; a Save (same id, new scene) keeps it
+    if (histFor.current !== (selected?.id ?? null)) {
+      histFor.current = selected?.id ?? null;
+      setHist(emptyHistory());
+      setMultiSel([]);
+      setBatchToast(null);
+    }
   }, [selected?.id, selected?.clipUx, selected?.stage, selected?.scene]);
 
   useEffect(() => {
@@ -1383,6 +1452,115 @@ export function App() {
     [assets],
   );
 
+  // S3-G #36 — every draft edit is one step {label, before, after}; nothing reaches the server until Save
+  const commitDraft = (label: string, nodes: SceneNodeDraft[], rootId: string | undefined = sceneRootId, key?: string) => {
+    const before = { nodes: sceneDraft, rootId: sceneRootId };
+    setHist((h) => pushCoalesced(h, { label, before, after: { nodes, rootId }, key }));
+    setSceneDraft(nodes);
+    if (rootId !== sceneRootId) setSceneRootId(rootId);
+  };
+  const applySnap = (st: { nodes: SceneNodeDraft[]; rootId: string | undefined }) => {
+    setSceneDraft(st.nodes);
+    setSceneRootId(st.rootId);
+    setMultiSel((sel) => pruneSel(sel, st.nodes));
+    setSceneNodeId((cur) => (cur && st.nodes.some((n) => n.id === cur && !isTombstone(n)) ? cur : st.rootId ?? liveNodes(st.nodes)[0]?.id ?? null));
+    setReplaceUndo(null);
+  };
+  const doUndo = () => {
+    const r = undoStep(hist);
+    if (!r) return;
+    setHist(r.history);
+    applySnap(r.state);
+  };
+  const doRedo = () => {
+    const r = redoStep(hist);
+    if (!r) return;
+    setHist(r.history);
+    applySnap(r.state);
+  };
+  const multiLive = multiSel.filter((id) => sceneDraft.some((n) => n.id === id && !isTombstone(n)));
+  const multiCentroid = multiLive.length > 1 ? centroid(sceneDraft, multiLive) : null;
+  const OP_LABEL: Record<BatchOp, string> = { hide: "Hide", show: "Show", delete: "Delete", restore: "Restore" };
+  const runBatch = (op: BatchOp) => {
+    const res = batchApply(sceneDraft, multiSel, op, sceneRootId ?? sceneDraft[0]?.id, sceneMaxNodes);
+    if (res.error) {
+      setBatchToast(res.error.startsWith("SCENE_NODES_MAX") ? restoreCapText(sceneMaxNodes) : res.error.replace(/^[A-Z_]+: /, ""));
+      return;
+    }
+    if (res.changed.length > 0) {
+      commitDraft(`${OP_LABEL[op]} ${res.changed.length} node${res.changed.length === 1 ? "" : "s"}`, res.nodes);
+      if (op === "delete" && sceneNodeId && res.changed.includes(sceneNodeId)) setSceneNodeId(sceneRootId ?? null);
+    }
+    setBatchToast(skipToast(op, res.skipped));
+  };
+  const moveSelection = (d: [number, number, number]) => {
+    commitDraft(`Move ${multiLive.length} nodes`, moveBy(sceneDraft, multiLive, d));
+  };
+  // S3-G #29 — drag box (Shift+drag on the empty canvas; plain drag keeps orbiting)
+  const boxStart = useRef<{ x: number; y: number } | null>(null);
+  const onCanvasPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (!isScene || !e.shiftKey || e.button !== 0) return;
+    if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+    if (controlsRef.current) controlsRef.current.enabled = false;
+    const r = e.currentTarget.getBoundingClientRect();
+    boxStart.current = { x: e.clientX - r.left, y: e.clientY - r.top };
+    setSelBox({ x0: boxStart.current.x, y0: boxStart.current.y, x1: boxStart.current.x, y1: boxStart.current.y });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    e.stopPropagation();
+  };
+  const boxIds = (box: { x0: number; y0: number; x1: number; y1: number }, el: HTMLElement) => {
+    const cam = controlsRef.current?.object as THREE.Camera | undefined;
+    if (!cam) return [] as string[];
+    const r = el.getBoundingClientRect();
+    const pts = liveNodes(sceneDraft).map((n) => {
+      const v = new THREE.Vector3(...(n.transform?.position ?? [0, 0, 0])).project(cam);
+      return { id: n.id, x: ((v.x + 1) / 2) * r.width, y: ((1 - v.y) / 2) * r.height };
+    });
+    return boxSelect(pts, box);
+  };
+  const onCanvasPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!boxStart.current) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setSelBox({ x0: boxStart.current.x, y0: boxStart.current.y, x1: e.clientX - r.left, y1: e.clientY - r.top });
+  };
+  const onCanvasPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!boxStart.current) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const box = { x0: boxStart.current.x, y0: boxStart.current.y, x1: e.clientX - r.left, y1: e.clientY - r.top };
+    boxStart.current = null;
+    setSelBox(null);
+    if (controlsRef.current) controlsRef.current.enabled = true;
+    const ids = boxIds(box, e.currentTarget);
+    setMultiSel(ids);
+    if (ids.length === 1) setSceneNodeId(ids[0]);
+  };
+  const keysRef = useRef({ undo: doUndo, redo: doRedo, nodes: sceneDraft });
+  keysRef.current = { undo: doUndo, redo: doRedo, nodes: sceneDraft };
+  useEffect(() => {
+    if (!isScene) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const k = historyKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, target: t });
+      if (k) {
+        e.preventDefault();
+        if (k === "undo") keysRef.current.undo();
+        else keysRef.current.redo();
+        return;
+      }
+      const tag = (t?.tagName ?? "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setMultiSel(selectAllLive(keysRef.current.nodes));
+      } else if (e.key === "Escape") {
+        setMultiSel([]);
+        setBatchToast(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isScene]);
+
   const newNodeId = () =>
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -1395,7 +1573,8 @@ export function App() {
     }
     const first = nonSceneAssets[0];
     const id = newNodeId();
-    setSceneDraft((prev) => [
+    const prev = sceneDraft;
+    commitDraft("Add node", [
       ...prev,
       {
         id,
@@ -1407,8 +1586,7 @@ export function App() {
           scale: [1, 1, 1],
         },
       },
-    ]);
-    if (!sceneRootId) setSceneRootId(id);
+    ], sceneRootId ?? id);
     setSceneNodeId(id);
   };
 
@@ -1419,7 +1597,7 @@ export function App() {
       setSceneSaveError(res.error);
       return;
     }
-    setSceneDraft(res.nodes);
+    commitDraft("Delete node", res.nodes);
     if (sceneNodeId === id) setSceneNodeId(sceneRootId ?? liveNodes(res.nodes)[0]?.id ?? null);
     if (replaceUndo?.nodeId === id) setReplaceUndo(null);
     setReplaceOpen(false);
@@ -1431,11 +1609,11 @@ export function App() {
       setSceneSaveError(res.error);
       return;
     }
-    setSceneDraft(res.nodes);
+    commitDraft("Restore node", res.nodes);
     setSceneSaveError(null);
   };
   const purgeDeleted = () => {
-    setSceneDraft((prev) => purgeTombstones(prev));
+    commitDraft("Purge deleted", purgeTombstones(sceneDraft));
     setPurgeConfirm(false);
   };
   // S3-E #35 — Replace asset… keeps id / transform / visible; one undo step until Save.
@@ -1446,7 +1624,7 @@ export function App() {
       setReplaceErr(res.error);
       return;
     }
-    setSceneDraft(res.nodes);
+    commitDraft("Replace asset", res.nodes);
     setReplaceUndo(res.undo);
     setReplaceErr(null);
     setReplaceOpen(false);
@@ -1470,7 +1648,7 @@ export function App() {
       setSceneSaveError(res.error);
       return;
     }
-    setSceneDraft(res.nodes as SceneNodeDraft[]);
+    commitDraft("Duplicate node", res.nodes as SceneNodeDraft[]);
     setSceneNodeId(res.node.id);
     setSceneSaveError(null);
   };
@@ -1529,8 +1707,11 @@ export function App() {
   };
 
   const patchSceneNode = (id: string, patch: Partial<SceneNodeDraft>) => {
-    setSceneDraft((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+    commitDraft(
+      "visible" in patch ? (patch.visible === false ? "Hide node" : "Show node") : "Edit node",
+      sceneDraft.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      sceneRootId,
+      "visible" in patch ? undefined : `patch:${id}:${Object.keys(patch).sort().join(",")}`,
     );
   };
 
@@ -1546,8 +1727,9 @@ export function App() {
       const step = Number.isFinite(snapStep) && snapStep > 0 ? snapStep : 0.25;
       num = snapScalar(num, step);
     }
-    setSceneDraft((prev) =>
-      prev.map((n) => {
+    commitDraft(
+      `Edit ${key}`,
+      sceneDraft.map((n) => {
         if (n.id !== id) return n;
         const base =
           n.transform?.[key] ??
@@ -1572,6 +1754,8 @@ export function App() {
           },
         };
       }),
+      sceneRootId,
+      `vec:${id}:${key}:${idx}`,
     );
   };
 
@@ -1626,6 +1810,7 @@ export function App() {
 
   const persistScene = async () => {
     if (!selected || selected.stage !== "scene") return;
+    const savedIdx = hist.index;
     if (liveNodes(sceneDraft).length < 1) {
       setSceneSaveError("SCENE_NO_LIVE_NODES: a scene needs at least one live node");
       return;
@@ -1667,6 +1852,8 @@ export function App() {
         throw new Error(`${r.status} ${textBody}`);
       }
       setReplaceUndo(null);
+      // S3-G #36 — Save keeps the stack; the marker sits on the step that was saved
+      setHist((h) => ({ ...h, marker: Math.min(savedIdx, h.steps.length) }));
       const updated = JSON.parse(textBody) as AssetMeta;
       setAssets((list) =>
         list.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)),
@@ -1815,25 +2002,14 @@ export function App() {
 
 
 
+  // S3-G #36 — nodes/root dirty = current step ≠ save marker; view + cameras still diff against saved
   const sceneDirty = useMemo(() => {
     if (!isScene || !selected) return false;
-    const saved = selected.scene?.nodes ?? [];
-    const draftSnap = normalizeSceneSnapshot(sceneDraft, sceneRootId, viewDraft, camerasDraft);
-    const savedSnap = normalizeSceneSnapshot(
-      saved.map((n) => ({
-        id: n.id,
-        assetId: n.assetId,
-        defaultClip: n.defaultClip,
-        visible: n.visible,
-        deleted: n.deleted === true,
-        transform: n.transform,
-      })),
-      selected.scene?.rootId,
-      selected.scene?.view,
-      selected.scene?.cameras,
-    );
+    if (isDirty(hist)) return true;
+    const draftSnap = normalizeSceneSnapshot([], undefined, viewDraft, camerasDraft);
+    const savedSnap = normalizeSceneSnapshot([], undefined, selected.scene?.view, selected.scene?.cameras);
     return draftSnap !== savedSnap;
-  }, [isScene, selected, sceneDraft, sceneRootId, viewDraft, camerasDraft]);
+  }, [isScene, selected, hist, viewDraft, camerasDraft]);
 
   // S3-C #80 — hotkeys 1..9 select the n-th CLIP in displayed order (viewer only).
   useEffect(() => {
@@ -1872,6 +2048,9 @@ export function App() {
             </p>
           );
         })()}
+        <nav className="side-nav" aria-label="Pages">
+          <NavLink to="/health" className="tiny nav-link" testId="nav-health">Health</NavLink>
+        </nav>
         <input
           ref={searchInputRef}
           className="search"
@@ -1971,8 +2150,19 @@ export function App() {
           ) : (
             <ol aria-label="Activity">
               {activity.items.map((it, k) => {
+                const sys = systemActivityLabel(it);
+                if (sys !== null) {
+                  return (
+                    <li key={`${it.at}-${it.kind}-${k}`} data-testid="activity-row" className="activity-row activity-system muted">
+                      <time dateTime={it.at} title={it.at} className="muted">
+                        {relativeTime(it.at)}
+                      </time>{" "}
+                      <span data-testid="activity-system">{sys}</span>
+                    </li>
+                  );
+                }
                 const target = assets.find((a) => a.id === it.id);
-                const label = it.slug ?? it.id.slice(0, 8);
+                const label = it.slug ?? (it.id ?? "").slice(0, 8);
                 return (
                   <li key={`${it.at}-${it.id}-${k}`} data-testid="activity-row" className="activity-row">
                     <time dateTime={it.at} title={it.at} className="muted">
@@ -2140,6 +2330,57 @@ export function App() {
                 )}
               </span>
             )}
+            {selected && (
+              <span className="share-wrap">
+                <button
+                  type="button"
+                  className="tiny"
+                  aria-expanded={cmpOpen}
+                  data-testid="compare-open"
+                  ref={cmpBtnRef}
+                  onClick={() => {
+                    setCmpQuery("");
+                    setCmpOpen((o) => !o);
+                  }}
+                >
+                  Compare…
+                </button>
+                {cmpOpen && (
+                  <div className="share-pop compare-picker" ref={cmpPopRef} style={cmpPos} data-testid="compare-picker" role="dialog" aria-label="Compare with">
+                    <input
+                      className="search"
+                      placeholder="Compare with…"
+                      aria-label="Filter assets to compare"
+                      value={cmpQuery}
+                      onChange={(e) => setCmpQuery(e.target.value)}
+                    />
+                    <ul className="compare-pick-list">
+                      {assets
+                        .filter((a) => a.id !== selected.id && (!cmpQuery || a.slug.includes(cmpQuery.toLowerCase())))
+                        .slice(0, 8)
+                        .map((a) => (
+                          <li key={a.id}>
+                            <button
+                              type="button"
+                              className="tiny"
+                              data-testid={`compare-pick-${a.slug}`}
+                              onClick={() => {
+                                setCmpOpen(false);
+                                navigate(`/?compare=${encodeURIComponent(selected.id)},${encodeURIComponent(a.id)}`);
+                              }}
+                            >
+                              {a.slug} <span className="muted">{a.stage}</span>
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                    <button type="button" className="tiny" data-testid="compare-cancel" onClick={() => setCmpOpen(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </span>
+            )}
             <button type="button" className="tiny" onClick={() => void toggleFullscreen()}>
               Fullscreen
             </button>
@@ -2248,7 +2489,24 @@ export function App() {
           role="img"
           aria-label={canvasAriaLabel(selected)}
           data-testid="viewer-canvas"
+          onPointerDownCapture={onCanvasPointerDown}
+          onPointerMove={onCanvasPointerMove}
+          onPointerUp={onCanvasPointerUp}
         >
+        {selBox ? (
+          <div
+            className="select-box"
+            data-testid="select-box"
+            style={{
+              left: Math.min(selBox.x0, selBox.x1),
+              top: Math.min(selBox.y0, selBox.y1),
+              width: Math.abs(selBox.x1 - selBox.x0),
+              height: Math.abs(selBox.y1 - selBox.y0),
+            }}
+          >
+            <span className="select-box-count">{viewerShellRef.current ? boxIds(selBox, viewerShellRef.current.querySelector(".viewer-canvas") as HTMLElement).length : 0}</span>
+          </div>
+        ) : null}
         {/* S3-D #86 — opaque drawing buffer: translucent GLB pixels must not show the page
             background through (visible once the clear colour differs from the chrome bg). */}
         <Canvas
@@ -2291,6 +2549,7 @@ export function App() {
             enableDamping={!reducedMotion}
             touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
           />
+          {isScene && multiCentroid ? <MultiGizmo at={multiCentroid} onCommit={moveSelection} /> : null}
           <Suspense fallback={null}>
             {isScene
               ? sceneNodes.map((n) => {
@@ -2320,8 +2579,8 @@ export function App() {
                       url={childUrl!}
                       clipName={reducedMotion ? undefined : clipForNode}
                       transform={n.transform}
-                      highlighted={sceneNodeId === n.id}
-                      selected={sceneNodeId === n.id}
+                      highlighted={sceneNodeId === n.id || multiSel.includes(n.id)}
+                      selected={multiLive.length < 2 && sceneNodeId === n.id}
                       visible={(n as SceneNodeDraft).visible !== false}
                       gizmoMode={gizmoMode}
                       snapEnabled={snapEnabled}
@@ -2330,8 +2589,9 @@ export function App() {
                       bones={showBones}
                       shadows={viewDraft.shadows}
                       onTransformCommit={(next) => {
-                        setSceneDraft((prev) =>
-                          prev.map((node) =>
+                        commitDraft(
+                          `${gizmoMode === "translate" ? "Move" : gizmoMode === "rotate" ? "Rotate" : "Scale"} node`,
+                          sceneDraft.map((node) =>
                             node.id === n.id
                               ? {
                                   ...node,
@@ -2641,6 +2901,28 @@ export function App() {
               </button>
               <button
                 type="button"
+                className="tiny"
+                data-testid="undo"
+                aria-label="Undo"
+                title={undoTitle(hist)}
+                disabled={!canUndo(hist)}
+                onClick={doUndo}
+              >
+                <span aria-hidden="true">↶</span> Undo
+              </button>
+              <button
+                type="button"
+                className="tiny"
+                data-testid="redo"
+                aria-label="Redo"
+                title={redoTitle(hist)}
+                disabled={!canRedo(hist)}
+                onClick={doRedo}
+              >
+                <span aria-hidden="true">↷</span> Redo
+              </button>
+              <button
+                type="button"
                 className="tiny primary"
                 data-testid="scene-save"
                 disabled={sceneSaving || liveCount < 1 || !sceneDirty || rlLeft > 0}
@@ -2648,6 +2930,11 @@ export function App() {
               >
                 {sceneSaving ? "Saving…" : sceneDirty ? "Save" : "Saved"}
               </button>
+              {sceneDirty ? (
+                <span className="dirty-indicator" data-testid="dirty-indicator" role="status">
+                  <span aria-hidden="true">•</span> Unsaved
+                </span>
+              ) : null}
               <span className="muted">gizmo</span>
               {(["translate", "rotate", "scale"] as const).map((m) => (
                 <button
@@ -2780,13 +3067,31 @@ export function App() {
                     className="tiny"
                     data-testid="node-replace-undo"
                     onClick={() => {
-                      setSceneDraft((prev) => undoReplace(prev, replaceUndo));
+                      commitDraft("Undo replace", undoReplace(sceneDraft, replaceUndo));
                       setReplaceUndo(null);
                     }}
                   >
                     Undo
                   </button>
                 </span>
+              </div>
+            )}
+            {multiSel.length > 0 && (
+              <div className="batch-actions" data-testid="batch-actions" role="toolbar" aria-label="Batch actions">
+                <strong data-testid="selection-count">{selectionLabel(multiSel.length)}</strong>
+                {(["hide", "show", "delete", "restore"] as const).map((op) => (
+                  <button key={op} type="button" className={op === "delete" ? "tiny danger" : "tiny"} data-testid={`batch-${op}`} onClick={() => runBatch(op)}>
+                    {OP_LABEL[op]}
+                  </button>
+                ))}
+                <button type="button" className="tiny" data-testid="batch-clear" onClick={() => { setMultiSel([]); setBatchToast(null); }}>
+                  Clear
+                </button>
+                {batchToast ? (
+                  <span className="batch-toast" role="status" aria-live="polite" data-testid="batch-toast">
+                    {batchToast}
+                  </span>
+                ) : null}
               </div>
             )}
             <ul className="scene-node-list">
@@ -2797,7 +3102,16 @@ export function App() {
                   const tc = resolveChild(n.assetId);
                   return (
                     <li key={n.id} className="scene-node-deleted" data-testid={`node-row-deleted-${n.id}`}>
-                      <span className="scene-node tombstone" aria-disabled="true">
+                      <span
+                        className={multiSel.includes(n.id) ? "scene-node tombstone multi" : "scene-node tombstone"}
+                        aria-disabled="true"
+                        data-testid={`node-row-${n.id}`}
+                        title="Shift-click to select for a batch Restore"
+                        onClick={(e) => {
+                          if (e.shiftKey) setMultiSel((s) => toggleSel(s, n.id));
+                        }}
+                      >
+                        {multiSel.includes(n.id) ? <span className="sel-check" aria-label="selected">✓</span> : null}
                         <code>{n.id.slice(0, 8)}</code>
                         <span className="muted"> → </span>
                         <code>{tc?.slug ?? n.assetId}</code>
@@ -2828,13 +3142,21 @@ export function App() {
                   <li key={n.id}>
                     <button
                       type="button"
-                      className={
-                        sceneNodeId === n.id
-                          ? "scene-node active"
-                          : "scene-node"
-                      }
-                      onClick={() => setSceneNodeId(n.id)}
+                      className={`scene-node${sceneNodeId === n.id ? " active" : ""}${multiSel.includes(n.id) ? " multi" : ""}`}
+                      data-testid={`node-row-${n.id}`}
+                      aria-pressed={multiSel.includes(n.id)}
+                      onClick={(e) => {
+                        // S3-G #29 — Shift-click toggles membership; plain click = single selection
+                        if (e.shiftKey) {
+                          setMultiSel((s) => toggleSel(s.length === 0 && sceneNodeId && sceneNodeId !== n.id ? [sceneNodeId] : s, n.id));
+                          return;
+                        }
+                        setMultiSel([]);
+                        setBatchToast(null);
+                        setSceneNodeId(n.id);
+                      }}
                     >
+                      {multiSel.includes(n.id) ? <span className="sel-check" aria-label="selected">✓</span> : null}
                       {isRoot ? "★ " : ""}
                       <code>{n.id.slice(0, 8)}</code>
                       <span className="muted"> → </span>
@@ -2961,7 +3283,7 @@ export function App() {
                           <button
                             type="button"
                             className="tiny"
-                            onClick={() => setSceneRootId(n.id)}
+                            onClick={() => commitDraft("Set root", sceneDraft, n.id)}
                             disabled={isRoot}
                           >
                             Set root
