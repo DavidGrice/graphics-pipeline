@@ -4,7 +4,8 @@
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
 import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
@@ -58,6 +59,18 @@ import {
   wireNode,
   type ReplaceUndo,
 } from "./s3eScene";
+import { activityVerb, bridgeBadge, type ActivityItem, type BridgeInfo } from "./s3fActivity";
+import {
+  clipRequiresIssue,
+  isLoopbackUrl,
+  moveItem,
+  requiresCaption,
+  shareUrl,
+  stepIndex,
+  toggleRequire,
+  type ClipRequiresErr,
+} from "./s3fShare";
+import { drawQr } from "./s3fQr";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -120,6 +133,8 @@ type ImportMetaView = {
   warnings?: Array<{ code: string; message?: string }>;
   /** S3-E #66 — optional mirror of timings.json */
   timingsMs?: TimingsMirror;
+  /** S3-F #47 — .kra source basename (echo only) */
+  sourceKra?: string;
 };
 
 /** S3-E #139 — which control a 429 countdown is shown under. */
@@ -138,6 +153,8 @@ type AssetMeta = {
   stage?: string;
   tags?: string[];
   clipTags?: Record<string, Array<"locomotion" | "emote" | "combat">>;
+  /** S3-F #11 — clip → required clips */
+  clipRequires?: Record<string, string[]>;
   clipDurations?: Record<string, number>;
   license?: string;
   /** S3-D #88 */
@@ -815,14 +832,49 @@ export function App() {
   // S3-E #41 — asset delete (asset panel) with inline confirm + in-use hint
   const [assetDelConfirm, setAssetDelConfirm] = useState(false);
   const [assetDelMsg, setAssetDelMsg] = useState<string | null>(null);
+  // S3-F #52 — bridge status badge; #128 activity feed (refreshes whenever the asset list reloads,
+  // i.e. after every successful local mutation — no polling).
+  const [bridge, setBridge] = useState<BridgeInfo | null>(null);
+  const [activity, setActivity] = useState<{ items: ActivityItem[]; total: number } | null>(null);
+  const [activityErr, setActivityErr] = useState<string | null>(null);
+  const [activityLimit, setActivityLimit] = useState(20);
+  // S3-F #85 — share popover (QR drawn locally; base from health share.baseUrl or location.origin)
+  const [shareBase, setShareBase] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const qrRef = useRef<HTMLCanvasElement | null>(null);
+  // S3-F #11 — clip requires editor (inline register/PATCH errors)
+  const [reqOpen, setReqOpen] = useState<string | null>(null);
+  const [reqIssue, setReqIssue] = useState<{ message: string; clips: string[] } | null>(null);
+  // S3-F #140 — featured strip + editor
+  const [featured, setFeatured] = useState<{ sceneIds: string[]; scenes: { id: string; slug: string; title?: string }[] } | null>(null);
+  const [featIdx, setFeatIdx] = useState(0);
+  const [featPaused, setFeatPaused] = useState(false);
+  const [featEditOpen, setFeatEditOpen] = useState(false);
+  const [featDraft, setFeatDraft] = useState<string[]>([]);
+  const [featErr, setFeatErr] = useState<string | null>(null);
+  // S3-F #85 — deep link ?asset=<id> / ?scene=<id> picked once the list loads
+  const deepLink = useRef<string | null>(
+    (() => {
+      try {
+        const q = new URLSearchParams(window.location.search);
+        return q.get("asset") || q.get("scene");
+      } catch {
+        return null;
+      }
+    })(),
+  );
   // S3-E #38 — live-node cap from the API (GET, never rate-limited); default 256 if unreachable.
   useEffect(() => {
     let alive = true;
     fetch(`${API}/api/health`)
       .then((r) => r.json())
-      .then((j: { limits?: { sceneMaxNodes?: unknown } }) => {
+      .then((j: { limits?: { sceneMaxNodes?: unknown }; bridge?: unknown; share?: { baseUrl?: unknown } }) => {
+        if (alive && typeof j?.share?.baseUrl === "string") setShareBase(j.share.baseUrl);
         const m = j?.limits?.sceneMaxNodes;
         if (alive && typeof m === "number" && Number.isInteger(m) && m >= 1) setSceneMaxNodes(m);
+        // S3-F #52 — bridge badge from health (once; no polling)
+        if (alive && j?.bridge && typeof j.bridge === "object") setBridge(j.bridge as BridgeInfo);
       })
       .catch(() => {});
     return () => {
@@ -896,6 +948,12 @@ export function App() {
         const list = Array.isArray(data) ? data : [];
         setAssets(list);
         setSelected((cur) => {
+          const dl = deepLink.current;
+          if (dl) {
+            deepLink.current = null;
+            const hit = list.find((a: AssetMeta) => a.id === dl || a.slug === dl);
+            if (hit) return hit;
+          }
           if (cur && list.some((a: AssetMeta) => a.id === cur.id)) {
             return list.find((a: AssetMeta) => a.id === cur.id) ?? cur;
           }
@@ -945,6 +1003,138 @@ export function App() {
         {rateLimitMessage(rlLeft)}
       </p>
     ) : null;
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/api/activity?limit=${activityLimit}`)
+      .then(async (r) => {
+        const j = await r.json().catch(() => null);
+        if (!alive) return;
+        if (!r.ok || !j || !Array.isArray(j.items)) {
+          setActivityErr(j?.code ?? `HTTP ${r.status}`);
+          return;
+        }
+        setActivityErr(null);
+        setActivity({ items: j.items as ActivityItem[], total: Number(j.total) || j.items.length });
+      })
+      .catch(() => alive && setActivityErr("NETWORK"));
+    return () => {
+      alive = false;
+    };
+  }, [assets, activityLimit]);
+
+  // S3-F #140 — featured list (GET; stale ids are simply not shown)
+  const loadFeatured = useCallback(() => {
+    fetch(`${API}/api/featured`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j && Array.isArray(j.scenes)) setFeatured({ sceneIds: j.sceneIds ?? [], scenes: j.scenes });
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => loadFeatured(), [assets, loadFeatured]);
+  const featN = featured?.scenes.length ?? 0;
+  useEffect(() => {
+    if (featN < 2 || reducedMotion || featPaused || featEditOpen) return;
+    const t = window.setInterval(() => setFeatIdx((i) => stepIndex(i, 1, featN)), 8000);
+    return () => window.clearInterval(t);
+  }, [featN, reducedMotion, featPaused, featEditOpen]);
+  const featCur = featN ? featured!.scenes[Math.min(featIdx, featN - 1)] : null;
+  const goFeatured = (dir: -1 | 1) => {
+    if (!featN) return;
+    const i = stepIndex(Math.min(featIdx, featN - 1), dir, featN);
+    setFeatIdx(i);
+    const hit = assets.find((a) => a.id === featured!.scenes[i].id);
+    if (hit) setSelected(hit);
+  };
+  async function saveFeatured() {
+    setFeatErr(null);
+    try {
+      const r = await fetch(`${API}/api/featured`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sceneIds: featDraft }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        setFeatErr(
+          j?.code === "FEATURED_INVALID"
+            ? `FEATURED_INVALID (${j.reason}): ${(j.invalid ?? []).join(", ") || j.error}`
+            : j?.code === "RATE_LIMITED"
+              ? `RATE_LIMITED: retry in ${j.retryAfterSec ?? "a few"}s`
+              : `${j?.code ?? `HTTP ${r.status}`}: ${j?.error ?? "save failed"}`,
+        );
+        return;
+      }
+      setFeatEditOpen(false);
+      setFeatIdx(0);
+      loadFeatured();
+    } catch {
+      setFeatErr("NETWORK: save failed");
+    }
+  }
+
+  // S3-F #85 — share URL for the selected asset/scene; QR drawn when the popover opens (no request)
+  const shareLink = selected
+    ? shareUrl(shareBase ?? window.location.origin, selected.stage === "scene" ? "scene" : "asset", selected.id)
+    : "";
+  useEffect(() => {
+    if (shareOpen && qrRef.current && shareLink) drawQr(qrRef.current, shareLink, 168);
+  }, [shareOpen, shareLink]);
+  // NIT-F-1 — keep the share popover inside the viewport (8px margin): clamp left, prefer below,
+  // flip above; < 600px wide it becomes a bottom sheet (CSS). Recomputed on resize/scroll.
+  const shareBtnRef = useRef<HTMLButtonElement | null>(null);
+  const sharePopRef = useRef<HTMLDivElement | null>(null);
+  const [sharePos, setSharePos] = useState<CSSProperties>({ visibility: "hidden" });
+  useLayoutEffect(() => {
+    if (!shareOpen) return;
+    const place = () => {
+      const btn = shareBtnRef.current, pop = sharePopRef.current;
+      if (!btn || !pop) return;
+      const vw = window.innerWidth, vh = window.innerHeight, M = 8;
+      if (vw < 600) { setSharePos({}); return; }
+      const b = btn.getBoundingClientRect();
+      const w = pop.offsetWidth, h = pop.offsetHeight;
+      const left = Math.max(M, Math.min(b.right - w, vw - w - M));
+      let top = b.bottom + 4;
+      if (top + h > vh - M) top = b.top - 4 - h >= M ? b.top - 4 - h : Math.max(M, vh - h - M);
+      setSharePos({ left, top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [shareOpen, shareLink]);
+  useEffect(() => {
+    setShareOpen(false);
+    setReqOpen(null);
+    setReqIssue(null);
+  }, [selected?.id]);
+
+  // S3-F #11 — save one clip's requires (PATCH clipRequires; errors inline, save stays enabled)
+  async function saveClipRequires(next: Record<string, string[]>) {
+    if (!selected) return;
+    setReqIssue(null);
+    try {
+      const r = await fetch(`${API}/api/assets/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clipRequires: Object.keys(next).length ? next : null }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        setReqIssue(clipRequiresIssue((j ?? { code: `HTTP_${r.status}` }) as ClipRequiresErr));
+        return;
+      }
+      setAssets((list) => list.map((a) => (a.id === j.id ? { ...a, ...j, clipRequires: j.clipRequires } : a)));
+      setSelected((cur) => (cur && cur.id === j.id ? { ...cur, ...j, clipRequires: j.clipRequires } : cur));
+    } catch {
+      setReqIssue({ message: "NETWORK: save failed", clips: [] });
+    }
+  }
 
   async function deleteSelectedAsset() {
     if (!selected) return;
@@ -1658,6 +1848,14 @@ export function App() {
       <aside className="sidebar">
         <h1>Graphics World Builder</h1>
         <p className="muted">localhost · Sprint 3-D</p>
+        {(() => {
+          const bb = bridgeBadge(bridge);
+          return (
+            <p className={`bridge-badge bridge-${bb.tone}`} data-testid="bridge-badge" title={bb.title} role="status">
+              <span aria-hidden="true">{bb.icon}</span> {bridge ? bb.text : "Krita: checking…"}
+            </p>
+          );
+        })()}
         <input
           ref={searchInputRef}
           className="search"
@@ -1743,6 +1941,56 @@ export function App() {
             </ol>
           )}
         </details>
+        {/* S3-F #128 — Activity (D1 §1): newest first, relative time with ISO title, slug links */}
+        <details className="activity-panel" open data-testid="activity-panel">
+          <summary>Activity{activity ? ` (${activity.total})` : ""}</summary>
+          {activityErr ? (
+            <p className="err" role="alert">
+              Activity unavailable ({activityErr})
+            </p>
+          ) : !activity ? (
+            <p className="muted">Loading…</p>
+          ) : activity.items.length === 0 ? (
+            <p className="muted">No activity yet.</p>
+          ) : (
+            <ol aria-label="Activity">
+              {activity.items.map((it, k) => {
+                const target = assets.find((a) => a.id === it.id);
+                const label = it.slug ?? it.id.slice(0, 8);
+                return (
+                  <li key={`${it.at}-${it.id}-${k}`} data-testid="activity-row" className="activity-row">
+                    <time dateTime={it.at} title={it.at} className="muted">
+                      {relativeTime(it.at)}
+                    </time>{" "}
+                    <span>{activityVerb(it.kind)}</span>{" "}
+                    {target ? (
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => {
+                          setSelected(target);
+                          setLoadError(null);
+                          setGltfClips([]);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ) : (
+                      <span className="activity-gone" title="no longer exists">
+                        {label}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {activity && activityLimit < 100 && activity.total > activity.items.length && (
+            <button type="button" className="tiny" data-testid="activity-more" onClick={() => setActivityLimit(100)}>
+              Show more
+            </button>
+          )}
+        </details>
         <button type="button" className="primary" onClick={() => setRegisterOpen((o) => !o)}>
           Register asset
         </button>
@@ -1826,6 +2074,51 @@ export function App() {
             )}
           </div>
           <div className="viewer-chrome">
+            {selected && (
+              <span className="share-wrap">
+                <button
+                  type="button"
+                  className="tiny"
+                  aria-expanded={shareOpen}
+                  data-testid="share-button"
+                  ref={shareBtnRef}
+                  onClick={() => {
+                    setShareCopied(false);
+                    setShareOpen((o) => !o);
+                  }}
+                >
+                  Share
+                </button>
+                {shareOpen && (
+                  <div className="share-pop" ref={sharePopRef} style={sharePos} data-testid="share-pop" role="dialog" aria-label="Share link">
+                    <canvas
+                      ref={qrRef}
+                      data-testid="share-qr"
+                      role="img"
+                      aria-label={`QR code for ${shareLink}`}
+                      width={168}
+                      height={168}
+                    />
+                    <input className="share-url" readOnly value={shareLink} onFocus={(e) => e.currentTarget.select()} aria-label="Share URL" />
+                    <button
+                      type="button"
+                      className="tiny"
+                      data-testid="share-copy"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(shareLink).then(() => setShareCopied(true), () => setShareCopied(false));
+                      }}
+                    >
+                      {shareCopied ? "Copied" : "Copy link"}
+                    </button>
+                    {isLoopbackUrl(shareLink) && (
+                      <p className="muted share-hint" data-testid="share-hint-loopback">
+                        This link only works on this device.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </span>
+            )}
             <button type="button" className="tiny" onClick={() => void toggleFullscreen()}>
               Fullscreen
             </button>
@@ -2091,6 +2384,12 @@ export function App() {
                   <div className="import-meta-row">
                     <span className="muted">originalFilename</span>
                     <code>{selected.importMeta.originalFilename}</code>
+                  </div>
+                )}
+                {selected.importMeta.sourceKra && (
+                  <div className="import-meta-row" data-testid="kra-source">
+                    <span className="muted">Source:</span>
+                    <code>{selected.importMeta.sourceKra}</code>
                   </div>
                 )}
                 {selected.importMeta.boneMapStub && (
@@ -2726,7 +3025,7 @@ export function App() {
             {authorPool.map((c) => {
               const disabled = (clipUx.disabled ?? []).includes(c);
               return (
-                <span key={c} className="author-row">
+                <span key={c} className={reqIssue?.clips.includes(c) ? "author-row req-bad" : "author-row"}>
                   <strong className={disabled ? "muted" : ""}>{c}</strong>
                   <button
                     type="button"
@@ -2759,12 +3058,52 @@ export function App() {
                   >
                     {disabled ? "Enable" : "Disable"}
                   </button>
+                  {/* S3-F #11 — "Requires" multi-select (1–8, never itself) edits this clip's map entry */}
+                  <span className="req-wrap" data-testid="clip-requires">
+                    <button
+                      type="button"
+                      aria-expanded={reqOpen === c}
+                      title="Clips this clip requires"
+                      onClick={() => setReqOpen((o) => (o === c ? null : c))}
+                    >
+                      Requires{selected?.clipRequires?.[c]?.length ? ` (${selected.clipRequires[c].length})` : ""}
+                    </button>
+                    {requiresCaption(selected?.clipRequires, c) && (
+                      <span className="muted req-caption">{requiresCaption(selected?.clipRequires, c)}</span>
+                    )}
+                    {reqOpen === c && (
+                      <span className="req-pop" role="group" aria-label={`${c} requires`}>
+                        {authorPool
+                          .filter((o) => o !== c)
+                          .map((o) => {
+                            const on = (selected?.clipRequires?.[c] ?? []).includes(o);
+                            const full = (selected?.clipRequires?.[c]?.length ?? 0) >= 8;
+                            return (
+                              <label key={o} className="req-opt">
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  disabled={!on && full}
+                                  onChange={() => void saveClipRequires(toggleRequire(selected?.clipRequires, c, o))}
+                                />
+                                {o}
+                              </label>
+                            );
+                          })}
+                      </span>
+                    )}
+                  </span>
                 </span>
               );
             })}
             <span className="muted persist-note">
               Persist: asset <code>clipUx</code> (API) + localStorage fallback
             </span>
+            {reqIssue && (
+              <p className="err req-issue" role="alert" data-testid="clip-requires-error">
+                {reqIssue.message}
+              </p>
+            )}
           </div>
         )}
         <div className="clip-bar clip-bar-s3c" aria-label="Playback + overlay">
@@ -2899,6 +3238,120 @@ export function App() {
                     </div>
           </div>
         </div>
+        {/* S3-F #140 — Featured row (Author, Blend/Speed, View, Featured, Transport); hidden when empty */}
+        {(featN > 0 || featEditOpen) && (
+          <div
+            className="dock-row featured-strip"
+            data-testid="featured-strip"
+            aria-label="Featured scenes"
+            tabIndex={0}
+            onMouseEnter={() => setFeatPaused(true)}
+            onMouseLeave={() => setFeatPaused(false)}
+            onFocus={() => setFeatPaused(true)}
+            onBlur={() => setFeatPaused(false)}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                goFeatured(-1);
+              } else if (e.key === "ArrowRight") {
+                e.preventDefault();
+                goFeatured(1);
+              }
+            }}
+          >
+            <span className="dock-group-title muted">Featured</span>
+            <button type="button" className="tiny" aria-label="Previous featured" disabled={featN < 2} onClick={() => goFeatured(-1)}>
+              ‹
+            </button>
+            <span className="featured-title">{featCur ? featCur.title ?? featCur.slug : "—"}</span>
+            <span className="muted">
+              {featN ? Math.min(featIdx, featN - 1) + 1 : 0} / {featN}
+            </span>
+            <button type="button" className="tiny" aria-label="Next featured" disabled={featN < 2} onClick={() => goFeatured(1)}>
+              ›
+            </button>
+            <button
+              type="button"
+              className="tiny"
+              onClick={() => {
+                setFeatDraft(featured?.scenes.map((x) => x.id) ?? []);
+                setFeatErr(null);
+                setFeatEditOpen(true);
+              }}
+            >
+              Edit featured
+            </button>
+          </div>
+        )}
+        {featN === 0 && !featEditOpen && assets.some((a) => a.stage === "scene") && (
+          <div className="dock-row featured-empty">
+            <button
+              type="button"
+              className="tiny"
+              onClick={() => {
+                setFeatDraft([]);
+                setFeatErr(null);
+                setFeatEditOpen(true);
+              }}
+            >
+              Feature scenes…
+            </button>
+          </div>
+        )}
+        {featEditOpen && (
+          <div className="featured-edit" role="dialog" aria-label="Edit featured" data-testid="featured-edit">
+            <ol>
+              {featDraft.map((id, i) => {
+                const a = assets.find((x) => x.id === id);
+                return (
+                  <li key={id}>
+                    <span>{a?.name ?? a?.slug ?? id}</span>
+                    <button type="button" className="tiny" aria-label="Move up" disabled={i === 0} onClick={() => setFeatDraft((d) => moveItem(d, i, -1))}>
+                      ↑
+                    </button>
+                    <button type="button" className="tiny" aria-label="Move down" disabled={i === featDraft.length - 1} onClick={() => setFeatDraft((d) => moveItem(d, i, 1))}>
+                      ↓
+                    </button>
+                    <button type="button" className="tiny" onClick={() => setFeatDraft((d) => d.filter((x) => x !== id))}>
+                      Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+            <label>
+              Add scene{" "}
+              <select
+                value=""
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v) setFeatDraft((d) => (d.includes(v) ? d : [...d, v]));
+                }}
+              >
+                <option value="">—</option>
+                {assets
+                  .filter((a) => a.stage === "scene" && !featDraft.includes(a.id))
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name ?? a.slug}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button type="button" className="tiny" onClick={() => void saveFeatured()}>
+              Save
+            </button>
+            <button type="button" className="tiny" onClick={() => setFeatEditOpen(false)}>
+              Cancel
+            </button>
+            {featErr && (
+              <p className="err" role="alert">
+                {featErr}
+              </p>
+            )}
+          </div>
+        )}
         <div className="clip-bar">
           <div className="clip-list" role="listbox" aria-label="Clips">
             {canPlay ? (
@@ -2922,6 +3375,9 @@ export function App() {
                   ) : null}
                   {c}
                   {clipUx.defaultClip === c ? " ★" : ""}
+                  {requiresCaption(selected?.clipRequires, c) && (
+                    <small className="req-caption muted"> {requiresCaption(selected?.clipRequires, c)}</small>
+                  )}
                 </button>
               ))
             ) : (

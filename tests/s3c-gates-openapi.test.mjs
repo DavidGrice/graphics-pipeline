@@ -247,12 +247,12 @@ test("T1.6 #19 HARDEN: armatureCount must be 1 when hasArmature, 0 when not; sha
   assert.equal(countArmatures(shared), 1);
 });
 
-test("T1.3 OpenAPI HARDEN: info.version 0.6.0 (S3-E E1); spec paths+methods ≡ Express routes (no phantoms)", async () => {
+test("T1.3 OpenAPI HARDEN: info.version 0.7.0 (S3-F #128); spec paths+methods ≡ Express routes (no phantoms)", async () => {
   const { loadOpenApi } = await import(
     pathToFileURL(path.join(ROOT, "apps/world-builder/server/src/openapi.js")).href
   );
   const { json } = loadOpenApi(ROOT);
-  assert.equal(json.info.version, "0.6.0");
+  assert.equal(json.info.version, "0.7.0");
   const METHODS = ["get", "post", "put", "patch", "delete"];
   const spec = new Set();
   for (const [p, ops] of Object.entries(json.paths)) {

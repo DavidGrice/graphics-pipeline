@@ -113,6 +113,7 @@ for (const a of selected) {
   if (a.clips) entry.clips = a.clips;
   if (a.rig) entry.rig = a.rig;
   if (a.clipTags) entry.clipTags = a.clipTags;
+  if (a.clipRequires) entry.clipRequires = a.clipRequires; // S3-F #11
   if (a.clipUx) entry.clipUx = a.clipUx;
   if (a.formats) entry.formats = { ...a.formats, glb: glbRel };
   if (a.id) entry.id = a.id;

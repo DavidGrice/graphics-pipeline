@@ -123,6 +123,7 @@ for (const meta of pack.assets || []) {
       license: meta.license,
       importMeta: meta.importMeta,
       clipTags: meta.clipTags,
+      clipRequires: meta.clipRequires, // S3-F #11 (API re-checks against the probed clips)
       clipUx: meta.clipUx,
       scene: meta.scene,
       formats: {
@@ -147,7 +148,8 @@ for (const meta of pack.assets || []) {
     }
     const res = await fetch(`${api}/api/assets`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // S3-F #128 — logged as kind "pack.import" in the activity feed
+      headers: { "Content-Type": "application/json", "X-Activity-Kind": "pack.import" },
       body: JSON.stringify(body),
     });
     const text = await res.text();

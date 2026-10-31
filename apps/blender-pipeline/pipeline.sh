@@ -14,13 +14,29 @@ BLENDER_BIN="${BLENDER_BIN:-blender}"
 MODE="${SMOKE_MODE:-${MODE:-billboard}}"
 SEED="${SEED:-0}"
 
-if [[ $# -lt 2 ]]; then
-  echo "Usage: BLENDER_BIN=/path/to/blender [MODE=billboard|rigged] $0 <in.png> <out.glb>" >&2
+# S3-F #110 — optional `--gltf-separate` (any position): also write a debug .gltf + .bin (+ textures)
+# into <out dir>/<name>.gltf-debug/ AFTER the canonical GLB. The GLB bytes, timings sidecar, register,
+# probe, pack and goldens never see the debug dir (gitignored: *.gltf-debug/).
+GLTF_SEPARATE=0
+POSITIONAL=()
+for arg in "$@"; do
+  case "${arg}" in
+    --gltf-separate) GLTF_SEPARATE=1 ;;
+    --*)
+      echo "ERROR: unknown option ${arg} (only --gltf-separate)" >&2
+      exit 1
+      ;;
+    *) POSITIONAL+=("${arg}") ;;
+  esac
+done
+
+if [[ ${#POSITIONAL[@]} -lt 2 ]]; then
+  echo "Usage: BLENDER_BIN=/path/to/blender [MODE=billboard|rigged] $0 [--gltf-separate] <in.png> <out.glb>" >&2
   exit 1
 fi
 
-IN_PNG="$1"
-OUT_GLB="$2"
+IN_PNG="${POSITIONAL[0]}"
+OUT_GLB="${POSITIONAL[1]}"
 
 if ! command -v "${BLENDER_BIN}" >/dev/null 2>&1 && [[ ! -x "${BLENDER_BIN}" ]]; then
   echo "ERROR: Blender binary not found: ${BLENDER_BIN}" >&2
@@ -66,7 +82,15 @@ now_ms() {
 EXPORT_T0="$(now_ms)"
 
 # Blender's exit status propagates (set -e); then the export size gate.
-"${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))"
+DEBUG_ARGS=()
+if [[ "${GLTF_SEPARATE}" == "1" ]]; then
+  GLB_BASE="$(basename "${OUT_GLB}")"
+  DEBUG_DIR="$(dirname "${OUT_GLB}")/${GLB_BASE%.glb}.gltf-debug"
+  # fresh debug dir every run (never stale .bin/textures); only ever a *.gltf-debug path
+  if [[ "${DEBUG_DIR}" == *.gltf-debug && -d "${DEBUG_DIR}" ]]; then rm -rf -- "${DEBUG_DIR}"; fi
+  DEBUG_ARGS=(--gltf-separate "${DEBUG_DIR}")
+fi
+"${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))" ${DEBUG_ARGS[@]+"${DEBUG_ARGS[@]}"}
 
 if [[ -f "${OUT_GLB}" ]]; then
   GLB_BYTES="$(wc -c < "${OUT_GLB}" | tr -d ' ')"

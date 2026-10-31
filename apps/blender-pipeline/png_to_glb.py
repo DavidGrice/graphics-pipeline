@@ -611,6 +611,52 @@ def _export_glb(bpy, out_path: Path) -> None:
                 pass
 
 
+def _pop_gltf_separate(args: list[str]) -> tuple[list[str], Path | None]:
+    """S3-F #110 — `--gltf-separate <dir>`: optional debug .gltf+.bin export dir (removed from args)."""
+    out: list[str] = []
+    debug_dir: Path | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--gltf-separate":
+            if i + 1 >= len(args):
+                print("ERROR: --gltf-separate requires a directory", file=sys.stderr)
+                raise SystemExit(2)
+            debug_dir = Path(args[i + 1])
+            i += 2
+            continue
+        out.append(args[i])
+        i += 1
+    return out, debug_dir
+
+
+def _export_gltf_separate(bpy, debug_dir: Path, stem: str) -> None:
+    """S3-F #110 — debug-only .gltf + .bin (+ textures) AFTER the canonical GLB is written.
+
+    Never touches the GLB: runs after `_export_glb` on the unchanged scene, into its own directory.
+    """
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    target = debug_dir / f"{stem}.gltf"
+    gltf = bpy.ops.export_scene.gltf
+    has_armature = any(o.type == "ARMATURE" for o in bpy.context.scene.objects)
+    try:
+        result = _call_op_tolerant(
+            gltf,
+            filepath=str(target),
+            export_format="GLTF_SEPARATE",
+            export_animations=True,
+            export_skins=has_armature,
+            export_yup=True,
+            export_apply=False,
+        )
+    except Exception as exc:
+        print(f"ERROR: glTF separate debug export failed: {exc}", file=sys.stderr)
+        raise SystemExit(4) from exc
+    if (result is not None and "FINISHED" not in result) or not target.is_file():
+        print(f"ERROR: glTF separate debug export did not finish: {result}", file=sys.stderr)
+        raise SystemExit(4)
+    print(f"OK: debug glTF {target.name} (+ .bin) in {debug_dir.name}/")
+
+
 def main() -> None:
     bpy = _require_bpy()
     _check_version(bpy)
@@ -623,6 +669,7 @@ def main() -> None:
         raise SystemExit(2)
 
     args = _argv_after_double_dash(sys.argv)
+    args, gltf_debug_dir = _pop_gltf_separate(args)
     mode, in_png, out_glb, seed = _parse_mode_and_paths(args)
     _set_seed(seed)
 
@@ -647,6 +694,8 @@ def main() -> None:
         raise SystemExit(4)
     _export_glb(bpy, out_glb)
     print(f"OK: wrote {out_glb} mode={mode} seed={seed} ({action_note})")
+    if gltf_debug_dir is not None:
+        _export_gltf_separate(bpy, gltf_debug_dir, out_glb.stem)
 
 
 if __name__ == "__main__":

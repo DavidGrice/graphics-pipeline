@@ -91,6 +91,72 @@ export const ClipTagValueSchema = z.enum(CLIP_TAG_VALUES);
  * Map clip name → tags. Keys must exist in asset.clips[] (enforced in AssetSchema).
  * Unknown tag strings reject at parse time.
  */
+/**
+ * S3-F #11 (R1 + D2) — asset-level `clipRequires: Record<clip, clip[]>` (map, not a per-clip
+ * field; follows clipTags). Each value: 1–8 unique clip names. Keys/values must be probed
+ * clips (CLIP_REQUIRES_MISSING) and the graph must be acyclic (CLIP_REQUIRES_CYCLE) — those two
+ * are enforced by `clipRequiresProblem` at register/PATCH (API + CLI), not here; wrong types are
+ * plain VALIDATION via Zod. Additive; assetSchemaVersion stays 3.
+ */
+export const CLIP_REQUIRES_MAX = 8;
+export const ClipRequiresSchema = z
+  .record(
+    z.string().min(1),
+    z
+      .array(z.string().min(1))
+      .min(1)
+      .max(CLIP_REQUIRES_MAX)
+      .refine((a) => new Set(a).size === a.length, "clipRequires values must be unique"),
+  )
+  .optional();
+
+export type ClipRequiresProblem =
+  | { code: "CLIP_REQUIRES_MISSING"; clip: string; missing: string[] }
+  | { code: "CLIP_REQUIRES_CYCLE"; cycle: string[] };
+
+/**
+ * S3-F #11 — first problem in a clipRequires map against the probed clips, or null.
+ * Missing (key or value not in clips) wins over cycles. Cycle = closed path [a, b, …, a];
+ * a self-reference is [a, a]. Diamonds are fine. Deterministic (insertion order).
+ */
+export function clipRequiresProblem(
+  clips: readonly string[],
+  map: Record<string, readonly string[]> | null | undefined,
+): ClipRequiresProblem | null {
+  if (!map) return null;
+  const have = new Set(clips);
+  for (const [clip, reqs] of Object.entries(map)) {
+    const missing = [...(have.has(clip) ? [] : [clip]), ...reqs.filter((r) => !have.has(r))];
+    if (missing.length) return { code: "CLIP_REQUIRES_MISSING", clip, missing: [...new Set(missing)] };
+  }
+  const state = new Map<string, 1 | 2>(); // 1 = on stack, 2 = done
+  const stack: string[] = [];
+  const visit = (c: string): string[] | null => {
+    state.set(c, 1);
+    stack.push(c);
+    for (const r of map[c] ?? []) {
+      if (state.get(r) === 1) return [...stack.slice(stack.indexOf(r)), r];
+      if (!state.has(r)) {
+        const found = visit(r);
+        if (found) return found;
+      }
+    }
+    stack.pop();
+    state.set(c, 2);
+    return null;
+  };
+  for (const c of Object.keys(map)) {
+    if (!state.has(c)) {
+      const cycle = visit(c);
+      if (cycle) return { code: "CLIP_REQUIRES_CYCLE", cycle };
+    }
+  }
+  return null;
+}
+
+/** S3-F #47 — importMeta.sourceKra: a basename only (no / or \\), 1–255 chars + ".kra". */
+export const SOURCE_KRA_RE = /^[^/\\]{1,255}\.kra$/;
+
 export const ClipTagsSchema = z
   .record(z.string(), z.array(ClipTagValueSchema).min(1))
   .optional();
@@ -220,6 +286,11 @@ export const ImportMetaSchema = z.object({
   // S3-E #66 — optional mirror of timings.json (integer ms; additive, schema version stays 3).
   // Written by register_asset.mjs only when importMeta already exists; never in goldens.
   timingsMs: ImportTimingsSchema.optional(),
+  // S3-F #47 — echo of the .kra source file name; basename only, never read/copied/committed.
+  sourceKra: z
+    .string()
+    .regex(SOURCE_KRA_RE, "importMeta.sourceKra must be a .kra file name with no path separator")
+    .optional(),
 });
 
 /**
@@ -370,6 +441,8 @@ export const AssetSchema = z
     clips: z.array(z.string()).default([]),
     clipUx: ClipUxSchema,
     clipTags: ClipTagsSchema,
+    /** S3-F #11 — clip → required clips (map). */
+    clipRequires: ClipRequiresSchema,
     /** S3-B #8 probe-only durations (ms). */
     clipDurations: ClipDurationsSchema,
     /** S3-B #137 SPDX license. */
