@@ -101,7 +101,7 @@ paths:
         - in: query
           name: sort
           schema: { type: string, enum: ["-createdAt", createdAt] }
-          description: S3-D #94 - order by createdAt; assets without createdAt (legacy) always last
+          description: S3-D #94 - order by createdAt; assets without createdAt (legacy) always last; S3-G - ties on `createdAt` sort newest-stored first when descending; ascending is unchanged
         - in: query
           name: limit
           schema: { type: integer, minimum: 1, maximum: 100 }
