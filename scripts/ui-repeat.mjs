@@ -41,6 +41,19 @@ export function parseTap(out) {
   return res;
 }
 
+/** TAP → diagnostic text (the "not ok" line + its indented YAML, capped) of every top-level failure. */
+export function failureBlocks(out, maxLines = 60) {
+  const lines = out.split("\n");
+  const blocks = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^not ok \d+ - /.test(lines[i])) continue;
+    const b = [lines[i]];
+    for (let j = i + 1; j < lines.length && /^\s/.test(lines[j]) && b.length < maxLines; j++) b.push(lines[j]);
+    blocks.push(b.join("\n"));
+  }
+  return blocks;
+}
+
 const files = uiFiles();
 // a parent `node --test` sets NODE_TEST_CONTEXT, which turns the child into a subtest stream — drop it
 const childEnv = { ...process.env };
@@ -55,6 +68,8 @@ for (let i = 1; i <= N; i++) {
   });
   runs.push(parseTap(r.stdout || ""));
   console.log(`run ${i}/${N}: exit ${r.status}`);
+  // NIT-G-4 — print each top-level failure's TAP diagnostic block so a CI flip carries its real error
+  for (const block of failureBlocks(r.stdout || "")) console.log(`--- run ${i} failure ---\n${block}`);
 }
 const names = [...new Set(runs.flatMap((m) => [...m.keys()]))].sort();
 let flips = 0;

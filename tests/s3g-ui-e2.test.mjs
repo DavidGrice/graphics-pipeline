@@ -254,6 +254,14 @@ test("#29 browser: a batch restore over the cap is refused whole with the D1 tex
   }
 });
 
+// NIT-G-4 — R3F creates its <canvas> in an effect after the host div mounts, so on a slow runner the
+// count right after a testid appears can be transiently 0 (builder canvas not created yet). Wait for the
+// expected count; a real leak (or a missing canvas) never settles there and the assertion still fails.
+async function settledCanvases(p, want, timeout = 10000) {
+  await p.waitForFunction((n) => document.querySelectorAll("canvas").length === n, want, { timeout }).catch(() => {});
+  return p.locator("canvas").count();
+}
+
 test("#84 browser: Compare… picker obeys NIT-F-1 at 390/1280/1920 (+resize); split vs stacked; diff markers; 5 cycles no leak", async (t) => {
   const env = browserEnv();
   if (env.skip) return t.skip(env.skip);
@@ -325,12 +333,21 @@ test("#84 browser: Compare… picker obeys NIT-F-1 at 390/1280/1920 (+resize); s
           await p.getByTestId("viewer-root").waitFor({ timeout: 10000 });
           await p.goForward(); // … and reopen the same compare
           await p.getByTestId("compare-diff").waitFor({ timeout: 10000 });
-          assert.equal(await p.locator("canvas").count(), 2, `cycle ${i + 1}: 2 canvases`);
+          assert.equal(await settledCanvases(p, 2), 2, `cycle ${i + 1}: 2 canvases`);
         }
         assert.deepEqual(warns, [], "no WebGL context leak");
         await p.getByTestId("compare-back").click();
         await p.getByTestId("viewer-root").waitFor({ timeout: 10000 });
-        assert.equal(await p.locator("canvas").count(), 1, "back link: compare canvases disposed");
+        assert.equal(await p.locator('[data-testid="compare-left"], [data-testid="compare-right"]').count(), 0, "back link: compare views gone");
+        // the builder's own viewer: one canvas, or none when its preflight swapped the canvas for the
+        // FILE_MISSING error card (the asset it shows has no GLB on this API's data dir, as in CI). Wait for
+        // that settled state; any leftover compare canvas keeps it from settling.
+        const builderOk = () => {
+          const c = document.querySelectorAll("canvas").length;
+          return document.querySelector('[data-testid="viewer-root"] [data-testid="error-card"]') ? c === 0 : c === 1;
+        };
+        await p.waitForFunction(builderOk, null, { timeout: 10000 }).catch(() => {});
+        assert.equal(await p.evaluate(builderOk), true, `back link: compare canvases disposed (canvases ${await p.locator("canvas").count()})`);
       }
       assert.deepEqual(errs, []);
       await p.close();
