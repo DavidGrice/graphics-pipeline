@@ -46,7 +46,8 @@ paths:
         "200":
           description: |
             {items: [{at, kind, id, slug?}], total}. kind is one of asset.register, asset.patch,
-            asset.delete, scene.save, scene.purge, pack.import. Reads activity.jsonl, then the one
+            asset.delete, scene.save, scene.purge, pack.import; S3-G ops kinds carry no id:
+            inbox.sweep {removed, kept}, webhook.refused {reason}, webhook.failed. Reads activity.jsonl, then the one
             rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
         "400":
           description: 'VALIDATION {field: "limit"} (not an integer 1..100)'

@@ -78,6 +78,6 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 
 ## S3-G
 - **Codes:** none
-- **Env:** `VITE_PORT`, `WB_API_PORT`
-- **Routes:** none
+- **Env:** `VITE_PORT`, `WB_API_PORT`, `INBOX_TTL_HOURS`, `WEBHOOK_URL`, `WEBHOOK_SECRET`, `WEBHOOK_ALLOW_HTTP`, `WEBHOOK_ALLOW_PRIVATE` (test-only)
+- **Routes:** none (`GET /api/activity` kinds += `inbox.sweep`, `webhook.refused`, `webhook.failed`)
 - **Schema:** none (`importMeta` VALIDATION bodies now carry `field`, e.g. `importMeta.source`; `assetSchemaVersion` stays 3)
