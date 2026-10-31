@@ -715,7 +715,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     // S3-B #91 — merge importMeta (do not wipe unrelated fields)
     if (body.importMeta !== undefined) {
       if (body.importMeta === null || typeof body.importMeta !== "object") {
-        return sendError(res, 400, "VALIDATION", "importMeta must be an object");
+        return sendError(res, 400, "VALIDATION", "importMeta must be an object", { field: "importMeta" });
       }
       patch.importMeta = {
         ...(existing.importMeta || {}),
