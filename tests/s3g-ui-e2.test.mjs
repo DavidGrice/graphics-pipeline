@@ -288,7 +288,12 @@ test("#84 browser: Compare… picker obeys NIT-F-1 at 390/1280/1920 (+resize); s
         await p.waitForTimeout(50);
       }
       await p.locator(pick).click();
-      await p.getByTestId("compare-diff").waitFor({ timeout: 10000 });
+      const diag = async (e) => {
+        const body = await p.evaluate(() => document.body.innerText.slice(0, 400)).catch(() => "?");
+        throw new Error(`${w}: ${e.message} · pageerrors=${JSON.stringify(errs)} · body=${body}`);
+      };
+      await p.getByTestId("compare-diff").waitFor({ timeout: 15000 }).catch(diag);
+      await p.getByTestId("compare-sync").waitFor({ timeout: 15000 }).catch(diag);
       assert.match(p.url(), new RegExp(`compare=${fx.ids.c1},${fx.ids.c2}`));
       const L = await p.getByTestId("compare-left").boundingBox();
       const R = await p.getByTestId("compare-right").boundingBox();

@@ -152,6 +152,8 @@ function CompareViewport({
         <strong>{asset.slug ?? asset.id}</strong> <span className="badge stage">{asset.stage ?? "—"}</span>
       </div>
       <div className="compare-canvas" role="img" aria-label={`${asset.slug ?? asset.id} preview`}>
+        {/* the boundary sits OUTSIDE the Canvas too: a WebGL context failure stays local to this side */}
+        <ViewBoundary>
         <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }} gl={{ alpha: false }} onCreated={({ gl }) => (glRef.current = gl)}>
           <color attach="background" args={["#14161c"]} />
           <ambientLight intensity={0.7} />
@@ -162,6 +164,7 @@ function CompareViewport({
             <Suspense fallback={null}>{url ? <CompareModel url={url} onStats={onStats} /> : null}</Suspense>
           </ViewBoundary>
         </Canvas>
+        </ViewBoundary>
         {!url ? <p className="muted compare-nomesh">No GLB for this asset</p> : null}
       </div>
     </div>
