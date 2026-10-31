@@ -20,9 +20,10 @@ function fail(msg) {
 }
 
 /** S3-G CO-1: `E1`..`E3` with an optional one-letter suffix (`e1b`, `E2a`), any case; `-` is a left
- * boundary too (`s3f-e1b`). Never inside a word: `E10`, `E4`, `ae1`, `node22` don't match. */
+ * boundary too (`s3f-e1b`). Never inside a word: `E10`, `E4`, `ae1`, `node22` don't match.
+ * S3-G E3 nit: `-` is a right boundary too (`e1b-thing` → E1). */
 export function laneOf(subject) {
-  const lane = subject.match(/(?:^|[\s(\[:/-])(E[123])[a-z]?(?=$|[\s)\]:/,.])/i);
+  const lane = subject.match(/(?:^|[\s(\[:/-])(E[123])[a-z]?(?=$|[\s)\]:/,.-])/i);
   if (lane) return lane[1].toUpperCase();
   if (/^docs\b/i.test(subject)) return "docs";
   if (/^tests?\b/i.test(subject)) return "test";
