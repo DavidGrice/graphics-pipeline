@@ -50,6 +50,32 @@ paths:
             rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
         "400":
           description: 'VALIDATION {field: "limit"} (not an integer 1..100)'
+  /api/featured:
+    get:
+      summary: Featured scene playlist (S3-F #140) - not rate-limited
+      responses:
+        "200":
+          description: |
+            {sceneIds, scenes: [{id, slug, title?}], stale?}. Deleted, tombstoned or non-scene ids are
+            dropped from scenes and listed in stale (never 500). Missing featured.json = empty.
+    put:
+      summary: Replace the featured playlist (S3-F #140) - rate-limited (mutation limiter)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sceneIds]
+              properties:
+                sceneIds: { type: array, maxItems: 20, uniqueItems: true, items: { type: string } }
+      responses:
+        "200":
+          description: "{sceneIds} (atomic write: tmp + rename)"
+        "400":
+          description: 'FEATURED_INVALID {invalid, reason} (shape, too_many, duplicate, unknown, not_scene)'
+        "429":
+          description: RATE_LIMITED
   /api/assets:
     get:
       summary: List/search assets
