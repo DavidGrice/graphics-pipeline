@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * S3-G E3 #150 — parse every fenced ```mermaid block in tracked docs/**.md offline with the pinned
+ * S3-G E3 #150 — parse every fenced ```mermaid block in every git-tracked *.md (E3-D4) offline with the pinned
  * `mermaid` + `jsdom` devDependencies (mermaid.parse; no DOM, no render, no images). Needs `npm ci` (CO-0).
  *   exit 0  all blocks parse — prints `OK mermaid (<n> blocks)`
  *   exit 1  `mermaid: <file>:<line>: <message>` per bad block, then `ERROR LINT_FAILED: mermaid`
@@ -51,10 +51,14 @@ export async function lintMermaidFiles(cwd, files) {
 }
 
 export function docsMarkdown(cwd) {
-  const ls = spawnSync("git", ["ls-files", "-z", "--", "docs/*.md", "docs/**/*.md"], { cwd, encoding: "utf8" });
+  const ls = spawnSync("git", ["ls-files", "-z", "--", "*.md"], { cwd, encoding: "utf8" });
   if (ls.status === 0) return [...new Set(ls.stdout.split("\0").filter(Boolean))].sort();
-  const dir = path.join(cwd, "docs");
-  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => `docs/${f}`).sort() : [];
+  const out = [];
+  for (const d of [".", "docs"]) {
+    const dir = path.join(cwd, d);
+    if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (f.endsWith(".md")) out.push(d === "." ? f : `${d}/${f}`);
+  }
+  return out.sort();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

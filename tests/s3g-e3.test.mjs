@@ -28,8 +28,9 @@ test("#150 extractMermaid finds fences with their opening line", () => {
   assert.equal(b[0].code, "flowchart TD\n  A-->B");
 });
 
-test("#150 every mermaid block under docs/ parses (existing ones + docs/pipeline.md)", async () => {
+test("#150 / E3-D4 every mermaid block in every tracked *.md parses (6 existing + docs/pipeline.md)", async () => {
   const files = docsMarkdown(root);
+  assert.ok(files.includes("AGENTS.md") && files.includes("README.md") && files.includes("docs/AGENT_GUIDE.md"));
   const { blocks, problems } = await lintMermaidFiles(root, files);
   assert.deepEqual(problems, []);
   assert.ok(blocks >= 8, `expected ≥ 8 blocks, got ${blocks}`);
