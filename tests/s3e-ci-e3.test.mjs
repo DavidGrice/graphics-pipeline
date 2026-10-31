@@ -46,9 +46,12 @@ const commitFile = (dir, rel, body, msg) => {
 const FAKE_PAT = ["gh", "p_", "R7tQ2vX9mK4pL8sW3nB6yH1cJ5dF0gZaUeIo"].join("");
 
 // ---------- #144 scan:secrets ----------
-test("#144 scan:secrets: gitleaks missing → SKIP_PLATFORM line, exit 0", () => {
-  const r = node("scripts/scan-secrets.mjs", [], { cwd: ROOT, env: { GITLEAKS_BIN: path.join(os.tmpdir(), "no-such-gitleaks") } });
-  assert.equal(r.status, 0);
+test("#144 scan:secrets: GITLEAKS_BIN unset + no gitleaks on PATH → SKIP_PLATFORM line, exit 0", () => {
+  // S3-F tip1: a bad explicit GITLEAKS_BIN is SECRETS_SCAN_FAILED (tests/s3f-tip1.test.mjs); only this case skips
+  const env = { ...process.env, PATH: path.dirname(process.execPath) };
+  delete env.GITLEAKS_BIN;
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/scan-secrets.mjs")], { cwd: ROOT, encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^SKIP_PLATFORM: gitleaks not on PATH/m);
 });
 
@@ -92,9 +95,18 @@ test("#144 .gitleaks.toml: default rules, only tests/fixtures/** allowlisted (no
 });
 
 // ---------- #107 lint:ci ----------
-test("#107 lint:ci: tools missing → two SKIP_PLATFORM lines, exit 0", () => {
-  const nope = path.join(os.tmpdir(), "no-such-tool");
-  const r = node("scripts/lint-ci.mjs", [], { cwd: ROOT, env: { ACTIONLINT_BIN: nope, SHELLCHECK_BIN: nope } });
+test("#107 lint:ci: tools unset + not on PATH → two SKIP_PLATFORM lines, exit 0", (t) => {
+  // S3-F CO-2: a set-but-bad ACTIONLINT_BIN / SHELLCHECK_BIN is CONFIG_INVALID (tests/s3f-tip1.test.mjs);
+  // only unset + absent skips. PATH = node + a dir holding just `git`.
+  const gitBin = spawnSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" }).stdout.split(/\r?\n/)[0].trim();
+  if (!gitBin || process.platform === "win32") return t.skip("SKIP_PLATFORM: needs git on PATH and symlinks");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "s3e-gitonly-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.symlinkSync(gitBin, path.join(dir, "git"));
+  const env = { ...process.env, PATH: [path.dirname(process.execPath), dir].join(path.delimiter) };
+  delete env.ACTIONLINT_BIN;
+  delete env.SHELLCHECK_BIN;
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/lint-ci.mjs")], { cwd: ROOT, encoding: "utf8", env });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^SKIP_PLATFORM: actionlint not on PATH/m);
   assert.match(r.stdout, /^SKIP_PLATFORM: shellcheck not on PATH/m);
