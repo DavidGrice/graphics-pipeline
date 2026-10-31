@@ -68,10 +68,11 @@ test("#128 each kind written once ({at, kind, id, slug?}, no bodies); feed newes
 });
 
 test("#128 limit bounds: default 20, 1..100 ok; 0 / 101 / abc / 1.5 / -1 / '' → 400 VALIDATION {field:'limit'}; GET never rate-limited", async () => {
-  const api = await startApi({ RATE_LIMIT_PER_MIN: "1" });
+  // NIT-F-2: seed the feed before the API starts (writing under a live API raced its own appends on Node 22)
+  const dataRoot = tmpDataRoot();
+  fs.writeFileSync(path.join(dataRoot, "activity.jsonl"), Array.from({ length: 30 }, (_, i) => JSON.stringify({ at: new Date(1e12 + i).toISOString(), kind: "asset.register", id: `id-${i}`, slug: `s-${i}` })).join("\n") + "\n");
+  const api = await startApi({ RATE_LIMIT_PER_MIN: "1", WB_DATA_ROOT: dataRoot });
   try {
-    const f = path.join(api.dataRoot, "activity.jsonl");
-    fs.writeFileSync(f, Array.from({ length: 30 }, (_, i) => JSON.stringify({ at: new Date(1e12 + i).toISOString(), kind: "asset.register", id: `id-${i}`, slug: `s-${i}` })).join("\n") + "\n");
     assert.equal((await feed(api)).body.items.length, 20);
     assert.equal((await feed(api, "?limit=1")).body.items[0].id, "id-29");
     assert.equal((await feed(api, "?limit=100")).body.items.length, 30);
