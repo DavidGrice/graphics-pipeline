@@ -1,6 +1,6 @@
 # Sprint 3-H — D1
 
-**Status:** Bound to R1 `docs/sprint3h-brief.md`. Pack `enhancement/s3h-growth-t8`.
+**Status:** DRAFT bound to R1 `/workspace/sprint3h-brief.md` (Leader cut a/b/c locked). Pack after S3-G merges: `enhancement/s3h-growth-t8`.
 **Swap:** #63 already shipped → **#117** (probe diff in compare). R1 wins on conflict.
 **Locks:** probe wins · no media in git · `BLENDER_BIN` fails closed · schema 3 · flat `{code, error}` · 6 `SKIP_*` · NIT-F-1 on every new popover · undo cap 100, reload clears history (E2 dev-5).
 **OpenAPI:** 0.8.0. **New code (D2):** `PRECONDITION_FAILED` (412) only.
@@ -14,6 +14,12 @@
 - Panel shows the 20 most recent registers by **register time** from `/api/activity` `asset.register` (#128), de-duped by `id`, skipping deleted/tombstoned, then hydrated via `GET /api/assets/:id`.
 - Empty activity (fresh store) → fall back to `sort=-createdAt&limit=20`.
 - AC: on a 40-fixture store with newer `createdAt`s, register one older-dated asset → it appears; a deleted asset does not. `data-testid`: `recent-import-row`.
+
+### §1 addendum (NIT-H-1)
+After hydrate, skip any asset with `deleted === true` (tombstone returns 200, not 404). A tip2 test tombstones a recent asset and asserts it leaves the panel.
+
+### §1 addendum (NIT-H-2, Leader ruling)
+Page `/api/activity` with `before` until there are 20 live (non-deleted) registers or the log ends, capped at **5 pages**. Each page uses the existing `limit=100` cap. Fall back to `sort=-createdAt&limit=20` only when the first page is empty (fresh store).
 
 ## §2 #69 — ETag / If-Match (E1 server, E2 client Save)
 - Strong `ETag` on GET asset/scene and every successful PATCH (incl. scene save and `…/clip-ux`).

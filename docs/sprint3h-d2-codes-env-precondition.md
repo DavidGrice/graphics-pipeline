@@ -1,6 +1,6 @@
 # Sprint 3-H — D2: codes, env and design answers
 
-**Status:** Bound to R1 `docs/sprint3h-brief.md`. Pack `enhancement/s3h-growth-t8`.
+**Status:** DRAFT bound to R1 `/workspace/sprint3h-brief.md`. Pack after S3-G merges: `enhancement/s3h-growth-t8`. Answers R1 §16.
 
 ## Codes
 | Code | Status | Notes |
@@ -49,3 +49,8 @@ Still exactly 6 `SKIP_*`. Schema stays **3**. OpenAPI → **0.8.0** (#69 headers
 
 ## Tip order (from R1)
 Tip1 = CO-1 + CO-2. #69 server before the client Save change.
+
+## Behaviour notes (tip2)
+- **NIT-H-1:** after hydrate, skip `deleted === true` (tombstone is 200).
+- **NIT-H-2:** `GET /api/activity?before=` ISO-8601 cursor; client pages until 20 live registers or end, max 5 pages × `limit=100`.
+
