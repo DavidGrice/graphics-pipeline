@@ -20,7 +20,7 @@ import {
 } from "@graphics-pipeline/asset-schema";
 import { parseInboxTtlHours, sweepInbox, referencedInboxNames, INBOX_SWEEP_INTERVAL_MS } from "./inboxSweep.js";
 import { parseWebhookConfig, createWebhook } from "./webhook.js";
-import { createActivityLog, parseActivityLimit, parseActivityMaxLines } from "./activity.js";
+import { createActivityLog, parseActivityLimit, parseActivityBefore, parseActivityMaxLines } from "./activity.js";
 import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
 import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
 
@@ -376,7 +376,8 @@ app.get("/api/health", async (_req, res) => {
 
 /**
  * S3-F #128 (D2) — GET /api/activity?limit= (default 20, integer 1..100, else 400 VALIDATION
- * {field: "limit"}). Newest-first `{items: [{at, kind, id, slug?}], total}` (current file, then
+ * {field: "limit"}). S3-H NIT-H-2 — optional `before=` ISO-8601; items with `at` strictly older
+ * (malformed → 400 VALIDATION {field:"before"}). Newest-first `{items, total}` (current file, then
  * activity.1.jsonl). GET → not rate-limited.
  */
 app.get("/api/activity", async (req, res) => {
@@ -385,7 +386,11 @@ app.get("/api/activity", async (req, res) => {
     if (limit === null) {
       return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100", { field: "limit" });
     }
-    res.json(await activity.read(limit));
+    const beforeParsed = parseActivityBefore(req.query.before);
+    if (!beforeParsed.ok) {
+      return sendError(res, 400, "VALIDATION", "before must be an ISO-8601 timestamp", { field: "before" });
+    }
+    res.json(await activity.read(limit, beforeParsed.before));
   } catch (err) {
     sendInternal(req, res, err);
   }

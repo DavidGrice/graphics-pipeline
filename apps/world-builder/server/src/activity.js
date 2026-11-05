@@ -67,6 +67,18 @@ export function parseActivityLimit(raw) {
   return n >= 1 && n <= ACTIVITY_LIMIT_MAX ? n : null;
 }
 
+/**
+ * S3-H NIT-H-2 — `?before=` ISO-8601 timestamp; items with `at` strictly older.
+ * Absent → null (no cursor). Present but not a finite Date → invalid (caller 400s).
+ */
+export function parseActivityBefore(raw) {
+  if (raw === undefined) return { ok: true, before: null };
+  if (typeof raw !== "string" || raw.trim() === "") return { ok: false };
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return { ok: false };
+  return { ok: true, before: new Date(t).toISOString() };
+}
+
 function countLines(file) {
   try {
     const txt = fs.readFileSync(file, "utf8");
@@ -149,12 +161,20 @@ export function createActivityLog({ dataRoot, maxLines = ACTIVITY_MAX_LINES_DEFA
       });
       return chain;
     },
-    /** Newest-first `{items, total}`: current file first, then activity.1.jsonl when more are needed. */
-    async read(limit = ACTIVITY_LIMIT_DEFAULT) {
+    /**
+     * Newest-first `{items, total}`: current file first, then activity.1.jsonl when more are needed.
+     * S3-H NIT-H-2 — optional `before` (ISO string): keep only entries with `at` strictly older.
+     */
+    async read(limit = ACTIVITY_LIMIT_DEFAULT, before = null) {
       await chain;
       const current = parseFile(file).reverse();
       const older = parseFile(rotated).reverse();
-      const items = current.length >= limit ? current.slice(0, limit) : [...current, ...older].slice(0, limit);
+      let all = [...current, ...older];
+      if (before) {
+        const cut = Date.parse(before);
+        all = all.filter((e) => Number.isFinite(Date.parse(e.at)) && Date.parse(e.at) < cut);
+      }
+      const items = all.slice(0, limit);
       return { items, total: current.length + older.length };
     },
   };

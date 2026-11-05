@@ -42,6 +42,12 @@ paths:
         - in: query
           name: limit
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: before
+          schema: { type: string, format: date-time }
+          description: |
+            S3-H NIT-H-2 — ISO-8601 cursor; return only entries with `at` strictly older than this
+            value (newest-first within the page). Malformed → 400 VALIDATION {field:"before"}.
       responses:
         "200":
           description: |
@@ -50,7 +56,7 @@ paths:
             inbox.sweep {removed, kept}, webhook.refused {reason}, webhook.failed. Reads activity.jsonl, then the one
             rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
         "400":
-          description: 'VALIDATION {field: "limit"} (not an integer 1..100)'
+          description: 'VALIDATION {field: "limit"|"before"} (limit not 1..100, or before not ISO-8601)'
   /api/featured:
     get:
       summary: Featured scene playlist (S3-F #140) - not rate-limited
