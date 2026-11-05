@@ -112,11 +112,12 @@ test("#94 static wiring: read-only panel below the list, uses sort/limit, empty 
   const panel = app.indexOf('data-testid="recent-imports"');
   const reg = app.indexOf("Register asset\n");
   assert.ok(list > 0 && panel > list && panel < reg, "below the list, above Register");
-  assert.match(app, /\/api\/assets\?sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/);
+  assert.match(app, /\/api\/activity\?limit=100/);
+  assert.match(app, /\/api\/assets\?sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/); // fresh-store fallback
   assert.match(app, /No imports yet\./);
   const block = app.slice(panel, app.indexOf("</details>", panel));
   assert.ok(!/method:\s*"(POST|PATCH|DELETE)"/.test(block), "read-only");
-  assert.match(block, /title=\{a\.createdAt/);
+  assert.match(block, /title=\{a\.registerAt \?\? a\.createdAt/);
 });
 
 test("#94 browser: panel shows the newest first; clicking a row selects it", async (t) => {

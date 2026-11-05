@@ -23,6 +23,7 @@ import {
   effectiveBlendMs,
   parseSlugClash,
   recentImports,
+  recentRegisterIds,
   relativeTime,
   resolveReducedMotion,
   resolveTheme,
@@ -211,6 +212,9 @@ type AssetMeta = {
     cameras?: CameraBookmark[];
   };
 };
+
+/** S3-H CO-1 — hydrated recent row; registerAt is activity time when from /api/activity. */
+type RecentRow = AssetMeta & { registerAt?: string };
 
 const API = "";
 
@@ -883,7 +887,7 @@ export function App() {
   // S3-D #127 — inline slug-clash state for the register form
   const [regClash, setRegClash] = useState<SlugClash | null>(null);
   // S3-D #94 — Recent imports (newest 20 by createdAt)
-  const [recent, setRecent] = useState<AssetMeta[]>([]);
+  const [recent, setRecent] = useState<RecentRow[]>([]);
   // S3-D #88 — alt text draft for the selected asset
   const [altDraft, setAltDraft] = useState("");
   const [altSaving, setAltSaving] = useState(false);
@@ -1017,12 +1021,34 @@ export function App() {
   const controlsRef = useRef<any>(null);
   const clipUxTimer = useRef<number | null>(null);
 
-  // S3-D #94 — server-sorted history; falls back to client sort if the API predates sort/limit.
+  // S3-H CO-1 — recent by register time from /api/activity (asset.register), de-duped, hydrated;
+  // fresh/empty activity falls back to S3-D #94 sort=-createdAt&limit=20.
   const refreshRecent = () =>
-    fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`)
+    fetch(`${API}/api/activity?limit=100`)
       .then(async (r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (Array.isArray(data)) setRecent(recentImports(data as AssetMeta[]));
+      .then(async (act) => {
+        const items = Array.isArray(act?.items) ? (act.items as { kind?: string; id?: string; at?: string }[]) : [];
+        // Pull more candidates than the panel limit so gone assets can be skipped without under-filling.
+        const regs = recentRegisterIds(items, 100);
+        if (regs.length === 0) {
+          const r = await fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`);
+          const data = r.ok ? await r.json() : null;
+          if (Array.isArray(data)) setRecent(recentImports(data as AssetMeta[]));
+          return;
+        }
+        const rows: RecentRow[] = [];
+        for (const { id, at } of regs) {
+          try {
+            const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
+            if (!r.ok) continue; // deleted / gone / tombstoned id
+            const a = (await r.json()) as AssetMeta;
+            rows.push({ ...a, registerAt: at });
+            if (rows.length >= RECENT_IMPORTS_LIMIT) break;
+          } catch {
+            /* skip unreachable */
+          }
+        }
+        setRecent(rows);
       })
       .catch(() => {
         /* panel is advisory; the main list reports API errors */
@@ -2169,8 +2195,8 @@ export function App() {
                           ⚠ {n}
                         </span>
                       ) : null}
-                      <span className="muted recent-time" title={a.createdAt ?? "no createdAt (legacy)"}>
-                        {relativeTime(a.createdAt)}
+                      <span className="muted recent-time" title={a.registerAt ?? a.createdAt ?? "no createdAt (legacy)"}>
+                        {relativeTime(a.registerAt ?? a.createdAt)}
                       </span>
                     </button>
                   </li>
