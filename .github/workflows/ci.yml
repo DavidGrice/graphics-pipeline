@@ -114,6 +114,50 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
         run: npm run test:ui:repeat -- 2
 
+
+  # S3-H CO-2 (ruling b) — populated-store UI pass on Node 24 only: seed 40 fixtures, run UI suite once.
+  # Hermetic stack on 8789/5175 so it never collides with ui-repeat's 8788/5174.
+  ui-populated:
+    name: ui-populated (Node 24)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build asset schema
+        run: npm run build:schema --if-present
+      - name: Start API (8789) + Vite (5175)
+        run: |
+          set -euo pipefail
+          data="${RUNNER_TEMP}/wb-data-pop"
+          mkdir -p "${data}"
+          PORT=8789 WB_DATA_ROOT="${data}" RATE_LIMIT_PER_MIN=100000 KRITA_HEALTH_MODE=off MONGO_URI=mongodb://127.0.0.1:1 \
+            nohup node apps/world-builder/server/src/index.js > "${RUNNER_TEMP}/api-pop.log" 2>&1 &
+          (cd apps/world-builder/client && VITE_PORT=5175 WB_API_PORT=8789 nohup npx vite > "${RUNNER_TEMP}/vite-pop.log" 2>&1 &)
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8789/api/health >/dev/null && curl -fsS http://localhost:5175/ >/dev/null; then
+              echo "stack up"; exit 0
+            fi
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/api-pop.log" "${RUNNER_TEMP}/vite-pop.log"
+          exit 1
+      - name: Seed 40 fixtures
+        env:
+          WORLD_API: http://127.0.0.1:8789
+        run: node scripts/seed-ui-populated.mjs 40
+      - name: UI suite once (populated store)
+        env:
+          UI_URL: http://localhost:5175/
+          WORLD_API: http://127.0.0.1:8789
+          CHROME_BIN: /usr/bin/google-chrome
+          WB_DATA_ROOT: ${{ runner.temp }}/wb-data-pop
+        run: npm run test:ui:repeat -- 1
+
   # S3-E #144 gitleaks (full history) + #107 actionlint/shellcheck. Tools are pinned and checksum-verified;
   # the npm scripts print SKIP_PLATFORM only where a tool is absent (local dev), never here.
   lint-secrets:
