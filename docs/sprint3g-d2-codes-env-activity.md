@@ -27,6 +27,8 @@ Still exactly 6 `SKIP_*` codes. Schema stays 3. OpenAPI stays 0.7.0 (no routes a
 | `webhook.failed` | "Webhook failed" | none |
 Rows without `id` render as plain text in the muted system style (same as tombstoned targets), with the relative time and ISO `title` like every row. Unknown future kinds fall back to the raw `kind` text, never an error.
 
+**Webhook guard additions (NIT-G-1, E2):** also block `ff00::/8`, `2002::/16` and `::/96` (widened from `::/128`), one test each incl. `2002:7f00:1::` and `::7f00:1`.
+
 **Webhook scope:** fires on non-scene `asset.register` and `asset.delete` only, not scene saves. `WEBHOOK_ALLOW_PRIVATE=1` is test-only: logs a startup warning, never set in `.env.example` or in CI outside the guard tests.
 
 ## Behaviour notes

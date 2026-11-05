@@ -14,9 +14,10 @@
 - Keys: Ctrl/Cmd+Z, Shift+Ctrl/Cmd+Z, Ctrl+Y; ignored while focus is in an input, textarea or contenteditable.
 - Dirty indicator: a "•" plus the text "Unsaved" beside Save whenever current step ≠ save marker. Undoing back to the marker clears it.
 - Cap 100; no UI when the oldest drops.
+- When a refresh reloads the scene and replaces the draft, the stack and save marker are cleared (Leader ruling on E2 deviation 5). Node and root dirty state comes from history; view and camera dirty state compares against the saved scene. The #35 replace-undo chip counts as one step.
 
 ## §3 #29 Multi-select
-- Shift-click toggles; drag box on empty canvas (1px dashed outline, 10% fill, plus a count label). Ctrl/Cmd+A selects live nodes; Esc clears.
+- Shift-click toggles; **Shift+drag** box on the canvas (plain drag orbits; a drag starting on a gizmo handle stays a gizmo drag). Canvas help text shows "Shift+drag to box-select"; box (1px dashed outline, 10% fill, plus a count label). Ctrl/Cmd+A selects live nodes; Esc clears.
 - Selected nodes: outline highlight plus a check badge in the outliner (not colour alone). Panel header reads "n selected".
 - Batch actions row: Hide, Show, Delete, Restore. Gizmo sits on the selection centroid.
 - Skips raise a toast: "2 skipped (root, already deleted)". A restore that would cross the node cap is refused whole with "Restore would exceed the N-node limit", with N read from `/api/health` `limits.sceneMaxNodes`).
@@ -34,3 +35,9 @@
 
 ## AC hooks
 `data-testid`: `undo`, `redo`, `dirty-indicator`, `select-box`, `selection-count`, `batch-actions`, `compare-left`, `compare-right`, `compare-sync`, `compare-diff`, `health-page`, `health-bridge`, `health-activity`. The viewer root carries `data-scene-ready` (CO-4).
+
+### §4 addendum (NIT-G-3, `2954300`)
+Compare loads each GLB only after a successful HEAD. On 404 it shows an in-view `compare-load-error` alert and raises no page error. #84 registers and cleans up its own GLB fixtures.
+
+### §6 note (NIT-G-2, `99e8e16`)
+`sort=-createdAt` breaks ties newest-stored first; ascending is unchanged. Known limit: an asset older than 20 others falls off the recent list.
