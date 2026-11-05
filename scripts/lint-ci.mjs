@@ -12,6 +12,7 @@
  * ignore); a bad file → `ERROR LINT_FAILED: dependabot` (+ one `dependabot: <problem>` line each), exit 1.
  * S3-G E3 #150 — parses every ```mermaid block in every tracked *.md (scripts/mermaid-lint.mjs; LINT_FAILED exit 1).
  * S3-G CO-2 — then runs scripts/changelog-verify.mjs (LINT_FAILED exit 1 on a sprint mismatch).
+ * S3-H CO-2 — then runs scripts/ui-fixture-lint.mjs (hard-coded asset ids in UI tests → LINT_FAILED).
  */
 import { spawnSync } from "node:child_process";
 import { overrideProblem, resolveTool } from "./tool-bin.mjs";
@@ -80,6 +81,15 @@ if (fs.existsSync(path.join(cwd, "docs/contract-changelog.md")) && fs.existsSync
 // S3-G E3 #150 / E3-D4 — mermaid blocks in every tracked *.md (pinned mermaid + jsdom; needs npm ci)
 {
   const r = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "mermaid-lint.mjs")], { cwd, encoding: "utf8" });
+  if (r.stdout) process.stdout.write(r.stdout);
+  if (r.stderr) process.stderr.write(r.stderr);
+  if (r.status !== 0) failed++;
+}
+
+
+// S3-H CO-2 — UI tests must not hard-code asset ids
+{
+  const r = spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "ui-fixture-lint.mjs")], { cwd, encoding: "utf8" });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
   if (r.status !== 0) failed++;
