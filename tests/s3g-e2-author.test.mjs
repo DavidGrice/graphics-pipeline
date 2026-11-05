@@ -2,7 +2,7 @@
  * S3-G E2 — pure helpers (R1 §5–8, D1 §1–5): #36 undo/redo (cap 100, save marker, redo cut,
  * input-safe keys), #29 batch ops (root/already skipped, cap refuses whole restore, selection
  * survives undo/redo), #84 compare parse + diff rows, #44 health view (no paths) + 429 back-off,
- * NIT-F-1 overlay placement. Plus contract locks: no new codes / routes, OpenAPI 0.7.0, 6 SKIP codes.
+ * NIT-F-1 overlay placement. Plus contract locks: no new codes / routes, OpenAPI 0.8.0, 6 SKIP codes.
  */
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
@@ -237,9 +237,9 @@ test("D1 §1 NIT-F-1 placement: below, flip above, clamp left to [8, iw − w �
 });
 
 // ---------------------------------------------------------------- locks
-test("E2 locks: client-only (no new route / code), OpenAPI 0.7.0, exactly 6 SKIP codes, schema 3", () => {
+test("E2 locks: client-only (no new route / code), OpenAPI 0.8.0, exactly 6 SKIP codes, schema 3", () => {
   const openapi = fs.readFileSync(path.join(ROOT, "docs/openapi.yaml"), "utf8");
-  assert.match(openapi, /version:\s*["']?0\.7\.0/);
+  assert.match(openapi, /version:\s*["']?0\.8\.0/);
   const guide = fs.readFileSync(path.join(ROOT, "docs/AGENT_GUIDE.md"), "utf8");
   assert.ok(guide.length > 0);
   const rep = fs.readFileSync(path.join(ROOT, "tests/reporters/skip-summary.mjs"), "utf8");

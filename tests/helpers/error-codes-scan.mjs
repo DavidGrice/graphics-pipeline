@@ -37,6 +37,9 @@ export const NON_CODES = new Set([
   "WEBHOOK_ALLOW_PRIVATE",
   "WEBHOOK_SECRET",
   "WEBHOOK_URL",
+  // S3-H #133 env vars (named by CONFIG_INVALID), not error codes
+  "PROBE_WORKERS",
+  "PROBE_TIMEOUT_MS",
 ]);
 
 const UPPER = "[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+";
