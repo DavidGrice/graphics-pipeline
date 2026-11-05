@@ -45,10 +45,10 @@ Page `/api/activity` with `before` until there are 20 live (non-deleted) registe
 - Toggle off by default; steps 0.1 / 0.25 / 0.5 / 1; session-local. Translate gizmo snaps each axis; batch move (#29) snaps the shared delta. One undo step. Rotate/scale do not snap in 3-H.
 - `data-testid`: `snap-toggle`, `snap-step`.
 
-## §7 #32 — Orbit bookmark cameras (E2)
-- Up to 8 named views in additive optional `view.bookmarks:[{name, position, target}]`. Cap → 400 `VALIDATION {field:"view.bookmarks"}` (or existing `SCENE_CAMERAS_MAX` if that already covers it — D2 notes which). Name 1..40 chars, unique.
-- **UI:** a "Cameras" button in the viewer chrome opens a popover (NIT-F-1: below, flip above, clamp, bottom sheet under 600px) listing bookmarks with Restore / Rename / Delete; footer "Save current view". Empty state: "No saved cameras yet". Cap reached disables Save and shows "8 of 8 cameras".
-- Restore is not an undo step. Add/remove marks unsaved via the view compare.
+## §7 #32 — Orbit bookmark cameras (E2 + E3 UI)
+- **Leader ruling:** reuse S3-C `scene.cameras` with `SCENE_CAMERAS_MAX` (**16**). Do **not** add `view.bookmarks` or change the schema. Schema stays 3. Cap overflow → existing `SCENE_CAMERAS_MAX` / `VALIDATION` path.
+- **E2 (`9ac620b`):** existing cameras select + save/rename/delete; D1 test ids wired. Restore via the select is **not** an undo step. Add/remove/rename marks unsaved via the view compare.
+- **E3 UI:** a "Cameras" control opens a NIT-F-1 popover (below → flip above → clamp → bottom sheet under 600px) listing bookmarks with Restore / Rename / Delete; footer "Save current view". Empty: "No saved cameras yet". At cap: Save disabled, hint **"16 of 16 cameras"**.
 - `data-testid`: `camera-bookmarks`, `camera-bookmark-item`, `camera-bookmark-save`, `camera-bookmark-restore`, `camera-bookmark-delete`.
 
 ## §8 #130 — Frustum-cull scene nodes (E2)
