@@ -82,3 +82,10 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 - **Routes:** none (`GET /api/activity` kinds += `inbox.sweep`, `webhook.refused`, `webhook.failed`)
 - **Schema:** none (`importMeta` VALIDATION bodies now carry `field`, e.g. `importMeta.source`; `assetSchemaVersion` stays 3)
 - **Sort:** `GET /api/assets?sort=` ties on `createdAt` sort newest-stored first when descending; ascending is unchanged
+
+## S3-H
+- **Codes:** `PRECONDITION_FAILED`
+- **Env:** none
+- **Routes:** `GET`/`PATCH`/`DELETE` `/api/assets/:id` and `PATCH` `/api/assets/:id/clip-ux` gain opt-in `If-Match` + strong `ETag` (OpenAPI 0.8.0); no new routes
+- **Schema:** none (`assetSchemaVersion` stays 3)
+
