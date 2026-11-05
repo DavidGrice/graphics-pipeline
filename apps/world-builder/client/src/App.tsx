@@ -1016,6 +1016,10 @@ export function App() {
   const cmpBtnRef = useRef<HTMLButtonElement | null>(null);
   const cmpPopRef = useRef<HTMLDivElement | null>(null);
   const cmpPos = useOverlayPlacement(cmpOpen, cmpBtnRef, cmpPopRef, cmpQuery);
+  // S3-H #32 — Cameras popover (NIT-F-1)
+  const [camOpen, setCamOpen] = useState(false);
+  const camBtnRef = useRef<HTMLButtonElement | null>(null);
+  const camPopRef = useRef<HTMLDivElement | null>(null);
   // S3-E #38/#41/#35 — cap (from /api/health limits), deleted-row toggle, purge confirm, replace
   const [sceneMaxNodes, setSceneMaxNodes] = useState(SCENE_MAX_NODES_DEFAULT);
   const [showDeleted, setShowDeleted] = useState(true);
@@ -1127,6 +1131,7 @@ export function App() {
   const [viewDraft, setViewDraft] = useState<Required<SceneView>>(resolveSceneView(undefined));
   // S3-C #32 — orbit bookmarks draft
   const [camerasDraft, setCamerasDraft] = useState<CameraBookmark[]>([]);
+  const camPos = useOverlayPlacement(camOpen, camBtnRef, camPopRef, camerasDraft.length);
   const [cameraSel, setCameraSel] = useState<string>("");
   const [cameraErr, setCameraErr] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3258,52 +3263,66 @@ export function App() {
               </select>
             </div>
             <div className="scene-author-actions" aria-label="Orbit bookmarks">
-              <span className="muted">
-                Cameras ({camerasDraft.length}/{CAMERAS_MAX})
-              </span>
-              <select
+              {/* S3-H #32 (Leader: reuse scene.cameras, cap 16) — Cameras popover, NIT-F-1 placement */}
+              <button
+                type="button"
+                className="tiny"
+                ref={camBtnRef}
                 data-testid="camera-bookmarks"
-                value={cameraSel}
-                aria-label="Camera bookmark"
-                onChange={(e) => e.target.value && jumpToCamera(e.target.value)}
+                aria-haspopup="dialog"
+                aria-expanded={camOpen}
+                onClick={() => setCamOpen((o) => !o)}
               >
-                <option value="">— select view —</option>
-                {camerasDraft.map((c) => (
-                  <option key={c.id} value={c.id} data-testid="camera-bookmark-item">
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="tiny"
-                data-testid="camera-bookmark-save"
-                disabled={camerasDraft.length >= CAMERAS_MAX}
-                onClick={saveCameraView}
-              >
-                + Save view
+                Cameras ({camerasDraft.length}/{CAMERAS_MAX})
               </button>
-              <button
-                type="button"
-                className="tiny"
-                disabled={!cameraSel}
-                onClick={() => {
-                  const cur = camerasDraft.find((c) => c.id === cameraSel);
-                  const name = window.prompt("Rename view", cur?.name ?? "");
-                  if (name !== null && cameraSel) renameCamera(cameraSel, name);
-                }}
-              >
-                Rename
-              </button>
-              <button
-                type="button"
-                className="tiny"
-                data-testid="camera-bookmark-delete"
-                disabled={!cameraSel}
-                onClick={() => cameraSel && deleteCamera(cameraSel)}
-              >
-                Delete
-              </button>
+              {camOpen && (
+                <div className="share-pop camera-pop" ref={camPopRef} style={camPos} role="dialog" aria-label="Saved cameras">
+                  {camerasDraft.length === 0 ? (
+                    <p className="muted" data-testid="camera-bookmark-empty">No saved cameras yet</p>
+                  ) : (
+                    <ul className="camera-list">
+                      {camerasDraft.map((c) => (
+                        <li key={c.id} data-testid="camera-bookmark-item" className={cameraSel === c.id ? "active" : undefined}>
+                          <span className="camera-name">{c.name}</span>
+                          <button type="button" className="tiny" data-testid="camera-bookmark-restore" onClick={() => jumpToCamera(c.id)}>
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            className="tiny"
+                            data-testid="camera-bookmark-rename"
+                            onClick={() => {
+                              const name = window.prompt("Rename view", c.name);
+                              if (name !== null) renameCamera(c.id, name);
+                            }}
+                          >
+                            Rename
+                          </button>
+                          <button type="button" className="tiny" data-testid="camera-bookmark-delete" onClick={() => deleteCamera(c.id)}>
+                            Delete
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="camera-foot">
+                    <button
+                      type="button"
+                      className="tiny"
+                      data-testid="camera-bookmark-save"
+                      disabled={camerasDraft.length >= CAMERAS_MAX}
+                      onClick={saveCameraView}
+                    >
+                      Save current view
+                    </button>
+                    {camerasDraft.length >= CAMERAS_MAX && (
+                      <span className="muted" data-testid="camera-bookmark-cap">
+                        {CAMERAS_MAX} of {CAMERAS_MAX} cameras
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}

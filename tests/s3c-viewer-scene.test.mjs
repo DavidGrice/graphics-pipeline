@@ -244,7 +244,7 @@ test("T1.4/T1.5 App.tsx wiring: crossfade, timescale, hotkeys, overlay, duplicat
   assert.match(APP, /shadows=\{viewDraft\.shadows\}/);
   assert.match(APP, /view: \{ ground: viewDraft\.ground, shadows: viewDraft\.shadows \}/);
   assert.match(APP, /cameras: camerasDraft/);
-  assert.match(APP, /\+ Save view/);
+  assert.match(APP, /\+ Save view|Save current view/); // S3-H #32 popover footer (D1)
   // session-only overlay: wireframe/bones never in persisted payloads
   const persistScene = APP.slice(APP.indexOf("const persistScene"), APP.indexOf("const resolveChild"));
   assert.doesNotMatch(persistScene, /wireframe|showBones/);
