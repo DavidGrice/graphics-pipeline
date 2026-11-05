@@ -809,3 +809,13 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 .etag-modal { background: var(--panel-bg); color: var(--text); border: 1px solid var(--border); max-width: min(28rem, calc(100vw - 16px)); padding: 1rem 1.25rem; border-radius: 8px; }
 .etag-modal h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
 .etag-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+/* S3-H #32 — Cameras popover rows; #117 What changed */
+.camera-pop { min-width: 16rem; }
+.camera-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.camera-list li { display: flex; gap: 4px; align-items: center; padding: 2px 0; }
+.camera-list li.active .camera-name { color: var(--accent-text); }
+.camera-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.camera-foot { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.compare-probe-diff { width: 100%; margin: 8px 0; }
+.compare-probe-diff ul { margin: 4px 0 0; padding-left: 1.2rem; }

@@ -10,6 +10,7 @@ import type { CSSProperties, ReactNode, RefObject } from "react";
 import * as THREE from "three";
 import { activityVerb, systemActivityLabel, type ActivityItem } from "./s3fActivity";
 import {
+  probeDiff,
   diffRows,
   healthView,
   nextPollMs,
@@ -256,6 +257,22 @@ export function CompareView({ search }: { search: string }) {
             <CompareViewport side="a" asset={pair.a} sync={sync} shared={shared} onStats={onA} />
             <CompareViewport side="b" asset={pair.b} sync={sync} shared={shared} onStats={onB} />
           </div>
+          {/* S3-H #117 — below the viewports, above the #84 table; full width, open by default */}
+          <details className="compare-probe-diff" data-testid="compare-probe-diff" open>
+            <summary>What changed</summary>
+            {(() => {
+              const changes = probeDiff(pair.a, pair.b, stats);
+              return changes.length === 0 ? (
+                <p className="muted">No differences</p>
+              ) : (
+                <ul>
+                  {changes.map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              );
+            })()}
+          </details>
           <table className="compare-diff" data-testid="compare-diff">
             <thead>
               <tr>
