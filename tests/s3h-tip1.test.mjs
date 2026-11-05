@@ -231,6 +231,12 @@ test("NIT-H-2: paging past a full non-register page still finds an older registe
   const oldId = runId("nit-h2-deep");
   const oldSlug = `nit-h2-deep-${process.pid}`;
   assert.equal((await post(api.url, billboardBody(oldId, oldSlug))).status, 201);
+  // activity writes are fire-and-forget: wait until the register is on disk before flooding
+  for (let i = 0; i < 50; i++) {
+    const a = await (await fetch(`${api.url}/api/activity?limit=5`)).json();
+    if (a.items.some((e) => e.kind === "asset.register" && e.id === oldId)) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
   const actFile = path.join(api.dataRoot, "activity.jsonl");
   const lines = [];
   for (let i = 0; i < 100; i++) {
