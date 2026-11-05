@@ -30,7 +30,9 @@
     "changelog": "node scripts/changelog.mjs",
     "changelog:verify": "node scripts/changelog-verify.mjs",
     "test:ui:repeat": "node scripts/ui-repeat.mjs",
-    "seed:ui-populated": "node scripts/seed-ui-populated.mjs"
+    "seed:ui-populated": "node scripts/seed-ui-populated.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs"
   },
   "devDependencies": {
     "jsdom": "30.1.3",
