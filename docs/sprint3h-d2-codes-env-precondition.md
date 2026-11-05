@@ -48,10 +48,12 @@ Still exactly 6 `SKIP_*`. Schema stays **3**. OpenAPI → **0.8.0** (#69 headers
 - Collapsible `<details open>` with summary "What changed"; body is the bullet list (or "No differences").
 - `data-testid: compare-probe-diff`. No extra horizontal scroll; no second popover.
 
-## Tip order (from R1)
-Tip1 = CO-1 + CO-2. #69 server before the client Save change.
 
-## Behaviour notes (tip2)
+## Behaviour notes (tip2+)
 - **NIT-H-1:** after hydrate, skip `deleted === true` (tombstone is 200).
 - **NIT-H-2:** `GET /api/activity?before=` ISO-8601 cursor; client pages until 20 live registers or end, max 5 pages × `limit=100`.
+- **400 client echoes (Leader ruling):** 400 bodies may echo caller-sent values (e.g. `FEATURED_INVALID.invalid`, zod `received`). Never server paths or absolute paths. Cap each echoed value at **200 characters**. Fuzz allows these echoes within that cap.
+
+## Tip order (from R1)
+Tip1 = CO-1 + CO-2. #69 server before the client Save change.
 
