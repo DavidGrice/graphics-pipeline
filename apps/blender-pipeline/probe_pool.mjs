@@ -58,6 +58,7 @@ export function createProbePool(opts = {}) {
 
   function spawn() {
     const worker = new Worker(workerUrl);
+    worker.unref(); // CLI/tests: idle workers must not pin the event loop
     const slot = { worker, busy: false };
     worker.on("message", (msg) => onMessage(slot, msg));
     worker.on("error", (err) => onCrash(slot, err));

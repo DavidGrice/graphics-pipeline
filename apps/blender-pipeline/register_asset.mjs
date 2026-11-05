@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
 import { cachedProbeAsync, probeCacheEnabled } from "./probe_cache.mjs";
-import { parseProbeWorkers, parseProbeTimeoutMs, INTERNAL } from "./probe_pool.mjs";
+import { parseProbeWorkers, parseProbeTimeoutMs, INTERNAL, resetSharedProbePoolForTests } from "./probe_pool.mjs";
 import { buildTimings, readExportMs, writeTimings } from "./timings.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
 import { parseMaxGlbMb, maxGlbBytes, clipRequiresProblem, ClipRequiresSchema } from "@graphics-pipeline/asset-schema";
@@ -446,3 +446,6 @@ console.log(`timings: total=${timings.totalMs}ms probe=${timings.stages.probe}ms
 console.log(
   `OK registered ${id} stage=${stage} characterType=${characterType} clips=${probed.clips.join(",")} → ${glbDest}`,
 );
+// S3-H #133 — close worker pool so the CLI exits (spawnSync callers must not hang).
+await resetSharedProbePoolForTests();
+process.exit(0);

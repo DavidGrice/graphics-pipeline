@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { unzipStore } from "./zip_store.mjs";
 import { cachedProbeAsync, probeCacheEnabled } from "./probe_cache.mjs";
-import { parseProbeWorkers, parseProbeTimeoutMs } from "./probe_pool.mjs";
+import { parseProbeWorkers, parseProbeTimeoutMs, resetSharedProbePoolForTests } from "./probe_pool.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -165,3 +165,5 @@ for (const meta of pack.assets || []) {
   }
 }
 console.log("OK import complete");
+await resetSharedProbePoolForTests();
+process.exit(0);
