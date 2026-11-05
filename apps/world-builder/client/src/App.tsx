@@ -190,6 +190,8 @@ type AssetMeta = {
   altText?: string;
   /** S3-D #94 */
   createdAt?: string;
+  /** S3-H NIT-H-1 — soft-tombstone; recent panel skips these */
+  deleted?: boolean;
   assetSchemaVersion?: number;
   scene?: {
     version?: number;
@@ -1033,7 +1035,9 @@ export function App() {
         if (regs.length === 0) {
           const r = await fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`);
           const data = r.ok ? await r.json() : null;
-          if (Array.isArray(data)) setRecent(recentImports(data as AssetMeta[]));
+          if (Array.isArray(data)) {
+            setRecent(recentImports((data as AssetMeta[]).filter((a) => a.deleted !== true)));
+          }
           return;
         }
         const rows: RecentRow[] = [];
@@ -1042,6 +1046,7 @@ export function App() {
             const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
             if (!r.ok) continue; // deleted / gone / tombstoned id
             const a = (await r.json()) as AssetMeta;
+            if (a.deleted === true) continue; // NIT-H-1 — tombstoned must not show
             rows.push({ ...a, registerAt: at });
             if (rows.length >= RECENT_IMPORTS_LIMIT) break;
           } catch {

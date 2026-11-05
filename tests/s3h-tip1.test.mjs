@@ -165,6 +165,36 @@ test("CO-1 fallback wiring: empty activity uses sort=-createdAt&limit=RECENT_IMP
   assert.match(app, /sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/);
 });
 
+
+test("NIT-H-1: tombstoned register (deleted:true) is skipped after hydrate", async () => {
+  const id = runId("nit-h1");
+  const slug = `nit-h1-${process.pid}`;
+  assert.equal((await post(api.url, billboardBody(id, slug))).status, 201);
+  // Soft-tombstone via upsert (POST stores the body; deleted is not a PATCH field)
+  assert.equal((await post(api.url, { ...billboardBody(id, slug), deleted: true })).status, 201);
+  const got = await (await fetch(`${api.url}/api/assets/${id}`)).json();
+  assert.equal(got.deleted, true);
+
+  const act = await (await fetch(`${api.url}/api/activity?limit=100`)).json();
+  assert.ok(act.items.some((x) => x.kind === "asset.register" && x.id === id));
+
+  const live = [];
+  for (const e of act.items) {
+    if (e.kind !== "asset.register" || live.includes(e.id)) continue;
+    const r = await fetch(`${api.url}/api/assets/${e.id}`);
+    if (!r.ok) continue;
+    const a = await r.json();
+    if (a.deleted === true) continue;
+    live.push(e.id);
+    if (live.length >= 20) break;
+  }
+  assert.ok(!live.includes(id), "tombstoned asset excluded from recent hydrate");
+
+  // App wiring asserts the skip
+  const app = fs.readFileSync(path.join(ROOT, "apps/world-builder/client/src/App.tsx"), "utf8");
+  assert.match(app, /a\.deleted === true\) continue/);
+});
+
 // ---------------------------------------------------------------- CO-2
 test("CO-2 registerFixture: registers, writes GLB, cleanup removes metadata", async () => {
   const dataRoot = api.dataRoot;
