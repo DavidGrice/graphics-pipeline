@@ -234,7 +234,7 @@ test("T1.5 schema scene.view + scene.cameras: 16 ok, 17 / NaN / bad fov / dup na
 // ---------------- App.tsx wiring ----------------
 test("T1.4/T1.5 App.tsx wiring: crossfade, timescale, hotkeys, overlay, duplicate, view, cameras", () => {
   assert.match(APP, /crossFadeTo\(next, plan\.seconds/);
-  assert.match(APP, /mixer\.current\.timeScale = clampTimeScale\(timeScale\)/);
+  assert.match(APP, /mixer\.current\.timeScale = (effectiveTimeScale\()?clampTimeScale\(timeScale\)/); // S3-H #2 × URL speed
   assert.match(APP, /addEventListener\("keydown"/);
   assert.match(APP, /clipForHotkey\(clipsForUi/);
   assert.match(APP, /new THREE\.SkeletonHelper\(/);

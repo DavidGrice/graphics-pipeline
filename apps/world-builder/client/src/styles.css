@@ -803,3 +803,9 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
   .health-grid { grid-template-columns: 1fr; }
   .compare-top a, .compare-sync, .compare-pick-list button, .batch-actions button { min-height: 44px; }
 }
+
+/* S3-H #69 — 412 "changed elsewhere" modal (centred; not an anchored popover) */
+.etag-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.etag-modal { background: var(--panel-bg); color: var(--text); border: 1px solid var(--border); max-width: min(28rem, calc(100vw - 16px)); padding: 1rem 1.25rem; border-radius: 8px; }
+.etag-modal h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.etag-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
