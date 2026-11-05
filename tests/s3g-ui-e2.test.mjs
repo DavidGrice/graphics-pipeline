@@ -232,7 +232,23 @@ test("#29 browser: a batch restore over the cap is refused whole with the D1 tex
     await sceneReady(p);
     await p.getByTestId("node-count").waitFor({ timeout: 10000 });
     assert.equal(await count(p), "Nodes 3 / 3");
-    await p.getByTestId("node-row-n3").click({ modifiers: ["Shift"] });
+    // NIT-G-4 — under 1-CPU load the scene-author panel (max-height 55vh, overflow:auto) keeps
+    // reflowing while R3F paints, so Playwright's click actionability never settles after it
+    // scrolls the tombstone into view (TimeoutError waiting on node-row-n3). Wait until the
+    // deleted row is visible, in view, and hittable at its centre; then shift-click with force
+    // so the flaky stability loop can't re-timeout. Assertions below are unchanged.
+    await p.getByTestId("node-row-deleted-n3").waitFor({ state: "visible", timeout: 15000 });
+    await p.getByTestId("node-row-n3").scrollIntoViewIfNeeded();
+    await p.waitForFunction(() => {
+      const el = document.querySelector('[data-testid="node-row-n3"]');
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return false;
+      if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) return false;
+      const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!(h && (h === el || el.contains(h)));
+    }, null, { timeout: 15000 });
+    await p.getByTestId("node-row-n3").click({ modifiers: ["Shift"], force: true });
     assert.equal(await text(p, "selection-count"), "1 selected");
     await p.getByTestId("batch-restore").click();
     assert.equal(await text(p, "batch-toast"), "Restore would exceed the 3-node limit");
