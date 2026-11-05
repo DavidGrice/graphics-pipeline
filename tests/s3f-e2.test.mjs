@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { ROOT, startApi, billboardBody, runId, loadClientTs, makeRiggedGlb } from "./helpers/s3d-synth.mjs";
+import { makeImportMeta } from "./helpers/import-meta.mjs";
 
 const SERVER = path.join(ROOT, "apps/world-builder/server/src/index.js");
 const REGISTER = path.join(ROOT, "apps/blender-pipeline/register_asset.mjs");
@@ -114,12 +115,12 @@ test("#11 CLI register --clip-requires: probe wins; MISSING / CYCLE exit 1 befor
 test("#47 importMeta.sourceKra: basename .kra round-trips; separators / other extensions → 400 VALIDATION", async () => {
   const api = await startApi();
   try {
-    const b = { ...billboardBody(runId("kra"), "kra"), importMeta: { source: "png_pipeline", sourceKra: "hero sheet v2.kra" } };
+    const b = { ...billboardBody(runId("kra"), "kra"), importMeta: makeImportMeta({ source: "png_pipeline", sourceKra: "hero sheet v2.kra" }) };
     const r = await post(api, b);
     assert.equal(r.status, 201);
     assert.equal((await r.json()).importMeta.sourceKra, "hero sheet v2.kra");
     for (const bad of ["art/hero.kra", "..\\hero.kra", "/abs/hero.kra", "hero.png", ".kra", "x".repeat(256) + ".kra"]) {
-      const res = await post(api, { ...billboardBody(runId("kra-bad"), "kra-bad"), importMeta: { source: "png_pipeline", sourceKra: bad } });
+      const res = await post(api, { ...billboardBody(runId("kra-bad"), "kra-bad"), importMeta: makeImportMeta({ source: "png_pipeline", sourceKra: bad }) });
       assert.equal(res.status, 400, bad);
       const j = await res.json();
       assert.equal(j.code, "VALIDATION");

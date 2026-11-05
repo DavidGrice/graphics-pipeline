@@ -1,0 +1,2 @@
+# Fake test HMAC (not a real secret) — S3-G E1 #72 webhook test, commit 0ef20a1
+0ef20a189d398f1f4447bb71f6815be4233d485f:tests/s3g-e1.test.mjs:generic-api-key:200

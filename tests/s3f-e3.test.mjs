@@ -55,9 +55,9 @@ function changelog() {
   return { md, sections, codes: field("Codes"), env: field("Env") };
 }
 
-test("#148 contract changelog: one section per sprint S2-C → S3-F, in order", () => {
+test("#148 contract changelog: one section per sprint S2-C → S3-G, in order", () => {
   const { sections } = changelog();
-  assert.deepEqual(sections, ["S2-C", "S2-D", "S2-E", "S2-F", "S2-G", "S3-A", "S3-B", "S3-C", "S3-D", "S3-E", "S3-F"]);
+  assert.deepEqual(sections, ["S2-C", "S2-D", "S2-E", "S2-F", "S2-G", "S3-A", "S3-B", "S3-C", "S3-D", "S3-E", "S3-F", "S3-G"]);
 });
 
 test("#148 both ways: every changelog code is in error-codes.md, every error-codes.md code is in the changelog", () => {

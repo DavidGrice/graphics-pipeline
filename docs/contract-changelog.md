@@ -75,3 +75,10 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 - **Env:** `ACTIVITY_MAX_LINES`, `BRIDGE`, `PUBLIC_BASE_URL`
 - **Routes:** `GET /api/activity`, `GET /api/featured`, `PUT /api/featured`, `GET /api/health` `bridge` + `share.baseUrl`
 - **Schema:** `clipRequires`, `importMeta.sourceKra` (both additive; `assetSchemaVersion` stays 3)
+
+## S3-G
+- **Codes:** none
+- **Env:** `VITE_PORT`, `WB_API_PORT`, `INBOX_TTL_HOURS`, `WEBHOOK_URL`, `WEBHOOK_SECRET`, `WEBHOOK_ALLOW_HTTP`, `WEBHOOK_ALLOW_PRIVATE` (test-only)
+- **Routes:** none (`GET /api/activity` kinds += `inbox.sweep`, `webhook.refused`, `webhook.failed`)
+- **Schema:** none (`importMeta` VALIDATION bodies now carry `field`, e.g. `importMeta.source`; `assetSchemaVersion` stays 3)
+- **Sort:** `GET /api/assets?sort=` ties on `createdAt` sort newest-stored first when descending; ascending is unchanged

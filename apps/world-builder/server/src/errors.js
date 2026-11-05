@@ -61,6 +61,25 @@ export function codeFromIssues(issues) {
 /** 400 from a failed safeParse result. */
 export function sendValidation(res, parsed) {
   const issues = parsed.error.issues;
+  // S3-G CO-3 — an importMeta failure names the first failing path as dotted text and never echoes the value
+  const im = issues.find((i) => i?.path?.[0] === "importMeta");
+  if (im) {
+    const field = issueField(im.path);
+    const clean = issues.map(({ received, ...rest }) => ({ ...rest, message: safeIssueMessage(rest) }));
+    return sendError(res, 400, "VALIDATION", `${field}: ${safeIssueMessage(im)}`, { field, issues: clean });
+  }
   const msg = issues.map((i) => i.message).join("; ");
   return sendError(res, 400, codeFromIssues(issues), msg, { issues });
+}
+
+/** `["importMeta","warnings",0,"code"]` → `importMeta.warnings[0].code`. */
+export function issueField(p) {
+  return p.reduce((acc, k) => (typeof k === "number" ? `${acc}[${k}]` : acc ? `${acc}.${k}` : String(k)), "");
+}
+
+/** Zod message without the received value (enum / type errors echo it). */
+export function safeIssueMessage(i) {
+  if (i.code === "invalid_enum_value") return `must be one of ${i.options.map((o) => JSON.stringify(o)).join(", ")}`;
+  if (i.code === "invalid_type") return i.received === "undefined" ? "Required" : `expected ${i.expected}`;
+  return String(i.message || "invalid");
 }

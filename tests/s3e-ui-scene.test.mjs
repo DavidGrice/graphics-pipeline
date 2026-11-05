@@ -54,6 +54,10 @@ async function fixtures(API, tag) {
   };
 }
 
+// S3-G CO-4 — wait for the viewer to report the scene applied + first frame (never a sleep)
+const sceneReady = (p) =>
+  p.waitForFunction(() => document.querySelector('[data-testid="viewer-root"]')?.getAttribute("data-scene-ready") === "1", null, { timeout: 15000 });
+
 const shot = async (p, name) => {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -74,6 +78,7 @@ test("#38/#41/#35 browser 1280: counter, tombstone row, root Delete disabled, Re
     await p.goto(UI, { waitUntil: "networkidle" });
     await p.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
     const count = p.getByTestId("node-count");
+    await sceneReady(p);
     await count.waitFor({ timeout: 10000 });
     assert.equal((await count.textContent()).trim(), "Nodes 2 / 256", "tombstone excluded");
     // tombstone row: struck through, Restore, not selectable
@@ -137,6 +142,7 @@ test("#38/#41/#35 browser 1280: counter, tombstone row, root Delete disabled, Re
     });
     await p2.goto(UI, { waitUntil: "networkidle" });
     await p2.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
+    await sceneReady(p2);
     await p2.getByTestId("node-count").waitFor({ timeout: 10000 });
     assert.equal((await p2.getByTestId("node-count").textContent()).trim(), "Nodes 2 / 2");
     assert.match(await p2.getByTestId("node-count").getAttribute("class"), /node-count-max/);
@@ -198,6 +204,7 @@ test("#87 browser 390×844 touch: canvas-only gestures, page scrolls, dock wraps
     p.on("pageerror", (e) => errs.push(String(e)));
     await p.goto(UI, { waitUntil: "networkidle" });
     await p.getByRole("button", { name: new RegExp(fx.slugs.scene) }).first().click();
+    await sceneReady(p);
     await p.getByTestId("node-count").waitFor({ timeout: 10000 });
     const canvas = p.locator(".viewer canvas").first();
     await canvas.waitFor({ timeout: 10000 });
@@ -226,7 +233,7 @@ test("#87 browser 390×844 touch: canvas-only gestures, page scrolls, dock wraps
       await p.waitForTimeout(16);
     }
     await touch("touchEnd", []);
-    await p.waitForTimeout(400);
+    await p.waitForFunction(() => scrollY > 50, null, { timeout: 5000 }).catch(() => {});
     assert.ok((await p.evaluate(() => scrollY)) > 50, "touch-drag on the sidebar scrolls the page");
     // gestures on the canvas: page doesn't scroll / zoom; one finger rotates the view
     await canvas.scrollIntoViewIfNeeded();

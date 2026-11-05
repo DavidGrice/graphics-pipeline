@@ -762,3 +762,44 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 .featured-edit { padding: 8px; border: 1px solid var(--border); border-radius: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .featured-edit ol { flex-basis: 100%; margin: 0; padding-left: 20px; }
 .featured-edit li { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 24px; }
+
+/* S3-G E2 — #36 undo/redo + dirty indicator, #29 multi-select, #84 compare, #44 health (D1 §1–5) */
+.dirty-indicator { font-size: 12px; color: var(--import-text); white-space: nowrap; }
+.scene-node.multi { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sel-check { display: inline-block; min-width: 1em; font-weight: 700; margin-right: 4px; }
+.batch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.batch-actions button { min-height: 24px; min-width: 24px; }
+.batch-toast { font-size: 12px; flex-basis: 100%; }
+.select-box { position: absolute; z-index: 5; pointer-events: none; border: 1px dashed var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.select-box-count { position: absolute; right: 2px; bottom: 2px; font-size: 11px; background: var(--panel-bg); padding: 0 3px; }
+.side-nav { display: flex; gap: 8px; margin: 0 0 8px; }
+.nav-link { display: inline-flex; align-items: center; min-height: 24px; color: var(--accent-text); }
+.compare-picker { min-width: 240px; }
+.compare-pick-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
+.compare-pick-list button { width: 100%; text-align: left; min-height: 24px; }
+.compare-page, .health-page { box-sizing: border-box; padding: 12px; height: 100vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.compare-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.compare-top h1 { margin: 0; font-size: 1.2rem; }
+.compare-top a, .compare-error a { min-height: 24px; display: inline-flex; align-items: center; color: var(--accent-text); }
+.compare-sync { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; }
+.compare-split { display: flex; flex-direction: row; gap: 8px; min-height: 0; }
+.compare-viewport { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.compare-canvas { position: relative; height: 46vh; min-height: 220px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.compare-nomesh { position: absolute; inset: auto 8px 8px 8px; margin: 0; }
+.compare-diff { border-collapse: collapse; width: 100%; font-size: 13px; }
+.compare-diff th, .compare-diff td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--rule); overflow-wrap: anywhere; }
+.compare-diff tr.differs th, .compare-diff tr.differs td { font-weight: 700; }
+.diff-mark { font-weight: 700; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.health-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-wrap: anywhere; }
+.health-card h2 { font-size: 0.9rem; margin: 0 0 4px; }
+.health-card ul { margin: 0; padding-left: 16px; }
+.health-activity { grid-column: 1 / -1; }
+.health-activity .activity-list { list-style: none; padding: 0; }
+@media (max-width: 599.98px) {
+  .compare-page, .health-page { height: auto; min-height: 100vh; }
+  .compare-split { flex-direction: column; }
+  .compare-canvas { height: 40vh; }
+  .health-grid { grid-template-columns: 1fr; }
+  .compare-top a, .compare-sync, .compare-pick-list button, .batch-actions button { min-height: 44px; }
+}

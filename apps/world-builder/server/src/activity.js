@@ -3,6 +3,7 @@
  *
  *   <DATA_ROOT>/activity.jsonl  one JSON object per line: {at, kind, id, slug?}  (D2 @1f687da / R1 §3)
  *   kind ∈ asset.register | asset.patch | asset.delete | scene.save | scene.purge | pack.import.
+ *   S3-G: ops kinds inbox.sweep {removed, kept} | webhook.refused {reason} | webhook.failed (no id).
  *   Never bodies, paths, IPs or headers.
  *   Cap ACTIVITY_MAX_LINES (default 10,000; test-only override): when the current file holds `cap`
  *   lines it is renamed to activity.1.jsonl (one generation kept, overwritten) and a fresh file starts.
@@ -21,7 +22,30 @@ export const ACTIVITY_KINDS = Object.freeze([
   "scene.save",
   "scene.purge",
   "pack.import",
+  // S3-G #78 / #72 (D2) — ops events: no id; only the listed counters/reason, never URL/IP/path/secret.
+  "inbox.sweep",
+  "webhook.refused",
+  "webhook.failed",
 ]);
+/** S3-G — kinds that carry no asset id; the allowed extra fields per kind. */
+export const OPS_KINDS = Object.freeze({
+  "inbox.sweep": ["removed", "kept"],
+  "webhook.refused": ["reason"],
+  "webhook.failed": [],
+});
+
+/** Sanitised ops entry `{at, kind, ...allowed}`; null for unknown kinds or bad field types. */
+export function opsEntry(kind, fields = {}, at = new Date()) {
+  const allowed = OPS_KINDS[kind];
+  if (!allowed) return null;
+  const e = { at: at.toISOString(), kind };
+  for (const k of allowed) {
+    const v = fields[k];
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) e[k] = v;
+    else if (typeof v === "string" && /^[a-z_-]{1,32}$/.test(v)) e[k] = v;
+  }
+  return e;
+}
 export const ACTIVITY_MAX_LINES_DEFAULT = 10000;
 export const ACTIVITY_LIMIT_DEFAULT = 20;
 export const ACTIVITY_LIMIT_MAX = 100;
@@ -55,6 +79,7 @@ function countLines(file) {
 
 /** Build a sanitised entry `{at, kind, id, slug?}` from an asset doc; null for unknown kinds. */
 export function activityEntry(kind, doc, at = new Date()) {
+  if (OPS_KINDS[kind]) return null;
   if (!ACTIVITY_KINDS.includes(kind) || !doc || typeof doc.id !== "string") return null;
   const e = { at: at.toISOString(), kind, id: doc.id };
   if (typeof doc.slug === "string" && doc.slug) e.slug = doc.slug;
@@ -74,7 +99,13 @@ function parseFile(file) {
     try {
       const e = JSON.parse(line);
       if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-      if (typeof e.at !== "string" || !ACTIVITY_KINDS.includes(e.kind) || typeof e.id !== "string") continue;
+      if (typeof e.at !== "string" || !ACTIVITY_KINDS.includes(e.kind)) continue;
+      if (OPS_KINDS[e.kind]) {
+        const o = opsEntry(e.kind, e, new Date(e.at));
+        if (o && !Number.isNaN(Date.parse(e.at))) items.push({ ...o, at: e.at });
+        continue;
+      }
+      if (typeof e.id !== "string") continue;
       const out = { at: e.at, kind: e.kind, id: e.id };
       if (typeof e.slug === "string") out.slug = e.slug;
       items.push(out);
@@ -106,7 +137,7 @@ export function createActivityLog({ dataRoot, maxLines = ACTIVITY_MAX_LINES_DEFA
     rotated,
     /** Fire-and-forget; resolves when written (or after the warning on failure). Never rejects. */
     record(kind, doc) {
-      const entry = activityEntry(kind, doc);
+      const entry = OPS_KINDS[kind] ? opsEntry(kind, doc ?? {}) : activityEntry(kind, doc);
       if (!entry) return chain;
       chain = chain.then(() => {
         try {
