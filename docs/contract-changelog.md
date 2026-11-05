@@ -85,7 +85,7 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 
 ## S3-H
 - **Codes:** `PRECONDITION_FAILED`
-- **Env:** none
+- **Env:** `PROBE_WORKERS`, `PROBE_TIMEOUT_MS`
 - **Routes:** `GET`/`PATCH`/`DELETE` `/api/assets/:id` and `PATCH` `/api/assets/:id/clip-ux` gain opt-in `If-Match` + strong `ETag` (OpenAPI 0.8.0); no new routes
 - **Schema:** none (`assetSchemaVersion` stays 3)
 

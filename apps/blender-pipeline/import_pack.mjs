@@ -10,7 +10,8 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { unzipStore } from "./zip_store.mjs";
-import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
+import { cachedProbeAsync, probeCacheEnabled } from "./probe_cache.mjs";
+import { parseProbeWorkers, parseProbeTimeoutMs } from "./probe_pool.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "../..");
@@ -100,7 +101,7 @@ for (const meta of pack.assets || []) {
     const dest = path.join(outdir, path.basename(glbRel));
     fs.writeFileSync(dest, file.data);
     // S3-E #134 — pack import shares the content-addressed probe cache.
-    const pc = cachedProbe(dest, { dataRoot: DATA_DIR });
+    const pc = await cachedProbeAsync(dest, { dataRoot: DATA_DIR });
     probed = pc.probed;
     console.log(`probeCache: ${pc.probeCache} ${meta.slug}`);
     // Copy into data/assets for register if API up — use gitignored path
