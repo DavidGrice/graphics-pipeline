@@ -33,6 +33,8 @@ import {
   type MotionPref,
   type SlugClash,
   type ThemePref,
+  ACTIVITY_PAGE_LIMIT,
+  ACTIVITY_MAX_PAGES,
 } from "./s3dPrefs";
 import {
   parseRateLimited,
@@ -1023,41 +1025,65 @@ export function App() {
   const controlsRef = useRef<any>(null);
   const clipUxTimer = useRef<number | null>(null);
 
-  // S3-H CO-1 — recent by register time from /api/activity (asset.register), de-duped, hydrated;
-  // fresh/empty activity falls back to S3-D #94 sort=-createdAt&limit=20.
-  const refreshRecent = () =>
-    fetch(`${API}/api/activity?limit=100`)
-      .then(async (r) => (r.ok ? r.json() : null))
-      .then(async (act) => {
-        const items = Array.isArray(act?.items) ? (act.items as { kind?: string; id?: string; at?: string }[]) : [];
-        // Pull more candidates than the panel limit so gone assets can be skipped without under-filling.
-        const regs = recentRegisterIds(items, 100);
-        if (regs.length === 0) {
-          const r = await fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`);
-          const data = r.ok ? await r.json() : null;
+  // S3-H CO-1 + NIT-H-2 — page /api/activity?limit=100&before= until 20 live registers or
+  // end of log, capped at ACTIVITY_MAX_PAGES. NIT-H-1 skips deleted:true after hydrate.
+  // Fresh/empty first page falls back to S3-D #94 sort=-createdAt&limit=20.
+  const refreshRecent = () => {
+    void (async () => {
+      try {
+        const rows: RecentRow[] = [];
+        const seen = new Set<string>();
+        let before: string | undefined;
+        let page = 0;
+        let firstEmpty = false;
+        while (rows.length < RECENT_IMPORTS_LIMIT && page < ACTIVITY_MAX_PAGES) {
+          const q = new URLSearchParams({ limit: String(ACTIVITY_PAGE_LIMIT) });
+          if (before) q.set("before", before);
+          const r = await fetch(`${API}/api/activity?${q}`);
+          const act = r.ok ? await r.json() : null;
+          const items = Array.isArray(act?.items)
+            ? (act.items as { kind?: string; id?: string; at?: string }[])
+            : [];
+          if (page === 0 && items.length === 0) {
+            firstEmpty = true;
+            break;
+          }
+          if (items.length === 0) break;
+          const regs = recentRegisterIds(items, ACTIVITY_PAGE_LIMIT);
+          for (const { id, at } of regs) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            try {
+              const ar = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
+              if (!ar.ok) continue; // deleted / gone
+              const a = (await ar.json()) as AssetMeta;
+              if (a.deleted === true) continue; // NIT-H-1 — tombstoned must not show
+              rows.push({ ...a, registerAt: at });
+              if (rows.length >= RECENT_IMPORTS_LIMIT) break;
+            } catch {
+              /* skip unreachable */
+            }
+          }
+          const oldest = items[items.length - 1]?.at;
+          if (typeof oldest !== "string" || oldest === before) break;
+          before = oldest;
+          page += 1;
+          if (items.length < ACTIVITY_PAGE_LIMIT) break; // short page → end of log
+        }
+        if (firstEmpty) {
+          const fr = await fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`);
+          const data = fr.ok ? await fr.json() : null;
           if (Array.isArray(data)) {
             setRecent(recentImports((data as AssetMeta[]).filter((a) => a.deleted !== true)));
           }
           return;
         }
-        const rows: RecentRow[] = [];
-        for (const { id, at } of regs) {
-          try {
-            const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
-            if (!r.ok) continue; // deleted / gone / tombstoned id
-            const a = (await r.json()) as AssetMeta;
-            if (a.deleted === true) continue; // NIT-H-1 — tombstoned must not show
-            rows.push({ ...a, registerAt: at });
-            if (rows.length >= RECENT_IMPORTS_LIMIT) break;
-          } catch {
-            /* skip unreachable */
-          }
-        }
         setRecent(rows);
-      })
-      .catch(() => {
+      } catch {
         /* panel is advisory; the main list reports API errors */
-      });
+      }
+    })();
+  };
 
   // S3-D #86/#90 — follow the OS settings live; the session selects override them.
   useEffect(() => {

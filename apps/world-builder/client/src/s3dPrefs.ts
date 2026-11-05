@@ -135,6 +135,10 @@ export function ambiguousSlugOf(message: string | null | undefined): string | nu
 
 // ---------------------------------------------------------------- #94 recent imports
 export const RECENT_IMPORTS_LIMIT = 20;
+/** S3-H NIT-H-2 — each /api/activity page uses the existing limit cap. */
+export const ACTIVITY_PAGE_LIMIT = 100;
+/** S3-H NIT-H-2 — stop paging after this many /api/activity fetches. */
+export const ACTIVITY_MAX_PAGES = 5;
 
 type Dated = { createdAt?: string };
 

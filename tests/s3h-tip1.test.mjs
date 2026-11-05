@@ -46,7 +46,8 @@ test("CO-1 recentRegisterIds: de-dupes asset.register newest-first; skips other 
 
 test("CO-1 App wiring: activity primary + createdAt fallback; registerAt on the row", () => {
   const app = fs.readFileSync(path.join(ROOT, "apps/world-builder/client/src/App.tsx"), "utf8");
-  assert.match(app, /\/api\/activity\?limit=100/);
+  assert.match(app, /\/api\/activity\?\$\{q\}/);
+  assert.match(app, /ACTIVITY_PAGE_LIMIT/);
   assert.match(app, /recentRegisterIds/);
   assert.match(app, /\/api\/assets\?sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/);
   assert.match(app, /registerAt \?\? a\.createdAt/);
@@ -161,7 +162,7 @@ test("CO-1 browser: Recent imports shows older-dated asset registered onto a 40-
 
 test("CO-1 fallback wiring: empty activity uses sort=-createdAt&limit=RECENT_IMPORTS_LIMIT", () => {
   const app = fs.readFileSync(path.join(ROOT, "apps/world-builder/client/src/App.tsx"), "utf8");
-  assert.match(app, /regs\.length === 0/);
+  assert.match(app, /firstEmpty/);
   assert.match(app, /sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/);
 });
 
@@ -193,6 +194,60 @@ test("NIT-H-1: tombstoned register (deleted:true) is skipped after hydrate", asy
   // App wiring asserts the skip
   const app = fs.readFileSync(path.join(ROOT, "apps/world-builder/client/src/App.tsx"), "utf8");
   assert.match(app, /a\.deleted === true\) continue/);
+});
+
+test("NIT-H-2: activity before= returns strictly older items; bad before → 400", async () => {
+  const ids = [];
+  for (let i = 0; i < 3; i++) {
+    const id = runId(`nit-h2-${i}`);
+    ids.push(id);
+    assert.equal((await post(api.url, billboardBody(id, `nit-h2-${i}-${process.pid}`))).status, 201);
+  }
+  const page1 = await (await fetch(`${api.url}/api/activity?limit=2`)).json();
+  assert.equal(page1.items.length, 2);
+  const cursor = page1.items[page1.items.length - 1].at;
+  const page2 = await (await fetch(`${api.url}/api/activity?limit=100&before=${encodeURIComponent(cursor)}`)).json();
+  assert.ok(page2.items.every((e) => Date.parse(e.at) < Date.parse(cursor)));
+  assert.ok(!page2.items.some((e) => e.at === cursor && e.id === page1.items[page1.items.length - 1].id));
+  const bad = await fetch(`${api.url}/api/activity?limit=20&before=not-a-date`);
+  assert.equal(bad.status, 400);
+  const body = await bad.json();
+  assert.equal(body.code, "VALIDATION");
+  assert.equal(body.field, "before");
+});
+
+test("NIT-H-2 App wiring: pages activity with before, capped at ACTIVITY_MAX_PAGES", async () => {
+  const P = await loadClientTs("apps/world-builder/client/src/s3dPrefs.ts");
+  assert.equal(P.ACTIVITY_PAGE_LIMIT, 100);
+  assert.equal(P.ACTIVITY_MAX_PAGES, 5);
+  const app = fs.readFileSync(path.join(ROOT, "apps/world-builder/client/src/App.tsx"), "utf8");
+  assert.match(app, /ACTIVITY_MAX_PAGES/);
+  assert.match(app, /q\.set\("before"/);
+  assert.match(app, /page < ACTIVITY_MAX_PAGES/);
+});
+
+test("NIT-H-2: paging past a full non-register page still finds an older register", async () => {
+  // Seed 100 patch events (via direct activity file) after a register so page1 has no registers.
+  const oldId = runId("nit-h2-deep");
+  const oldSlug = `nit-h2-deep-${process.pid}`;
+  assert.equal((await post(api.url, billboardBody(oldId, oldSlug))).status, 201);
+  const actFile = path.join(api.dataRoot, "activity.jsonl");
+  const lines = [];
+  for (let i = 0; i < 100; i++) {
+    lines.push(JSON.stringify({
+      at: new Date(Date.UTC(2099, 0, 1, 0, 0, i)).toISOString(),
+      kind: "asset.patch",
+      id: runId(`nit-h2-patch-${i}`),
+    }));
+  }
+  fs.appendFileSync(actFile, lines.join("\n") + "\n");
+  const page1 = await (await fetch(`${api.url}/api/activity?limit=100`)).json();
+  assert.equal(page1.items.length, 100);
+  assert.ok(page1.items.every((e) => e.kind === "asset.patch"), "page1 flooded with patches");
+  const cursor = page1.items[page1.items.length - 1].at;
+  const page2 = await (await fetch(`${api.url}/api/activity?limit=100&before=${encodeURIComponent(cursor)}`)).json();
+  const regs = page2.items.filter((e) => e.kind === "asset.register" && e.id === oldId);
+  assert.ok(regs.length >= 1, "older register reachable via before=");
 });
 
 // ---------------------------------------------------------------- CO-2
