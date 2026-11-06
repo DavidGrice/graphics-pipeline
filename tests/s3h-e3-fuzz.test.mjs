@@ -101,7 +101,7 @@ async function checkResponse(r, sent) {
         continue;
       }
       if (typeof s !== "string" || s.length <= 200) continue;
-      if (over.some((sent) => s === sent || sent.startsWith(s) || s.startsWith(sent.slice(0, 200)))) {
+      if (over.some((sent) => s === sent || sent.startsWith(s) || s.startsWith(sent.slice(0, 200)) || s.includes(sent.slice(0, 201)))) {
         return `echo over 200 chars in ${r.status} body`;
       }
     }
@@ -232,4 +232,7 @@ test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
   const serverOnly = "y".repeat(5000);
   const serverBody = JSON.stringify({ code: "FEATURED_INVALID", error: serverOnly });
   assert.equal(await checkResponse({ status: 400, text: async () => serverBody }, { sceneIds: [L] }), null);
+  // mid-string zod-style uncapped echo (the case capQuoted handles)
+  const mid = JSON.stringify({ code: "FEATURED_INVALID", error: `bad, received '${L}'` });
+  assert.match((await checkResponse({ status: 400, text: async () => mid }, { sceneIds: [L] })) ?? "", /echo over 200 chars/);
 });
