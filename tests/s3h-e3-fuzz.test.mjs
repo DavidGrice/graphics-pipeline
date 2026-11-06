@@ -90,15 +90,21 @@ async function checkResponse(r, sent) {
   // D2: echoes are allowed within the 200-char cap (a capped echo is the first 199 chars + "…")
   const forms = echoed.flatMap((s) => (s.length > 200 ? [s.slice(0, 199) + "…"] : [s]));
   for (const s of forms.sort((a, b) => b.length - a.length)) if (s.length > 1) scan = scan.split(JSON.stringify(s).slice(1, -1)).join("");
-  // any JSON string over 200 chars is an uncapped echo (forms are all ≤200, so never gate on f.length > 200)
-  for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
-    let s;
-    try {
-      s = JSON.parse(`"${m[1]}"`);
-    } catch {
-      continue;
+  // D2: only on error bodies, flag uncapped echoes of client-sent values (not server-written text, not 2xx payloads)
+  if (r.status >= 400) {
+    const over = echoed.filter((s) => s.length > 200);
+    for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      let s;
+      try {
+        s = JSON.parse(`"${m[1]}"`);
+      } catch {
+        continue;
+      }
+      if (typeof s !== "string" || s.length <= 200) continue;
+      if (over.some((sent) => s === sent || sent.startsWith(s) || s.startsWith(sent.slice(0, 200)))) {
+        return `echo over 200 chars in ${r.status} body`;
+      }
     }
-    if (typeof s === "string" && s.length > 200) return `echo over 200 chars in ${r.status} body`;
   }
   if (ABS.test(scan)) return `absolute path in ${r.status} body: ${text.slice(0, 200)}`;
   if (STACK.test(text)) return `stack trace in ${r.status} body`;
@@ -222,4 +228,8 @@ test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
     { sceneIds: [L] },
   );
   assert.equal(ok, null);
+  // server-written long string (not a client echo) must not trip the oracle
+  const serverOnly = "y".repeat(5000);
+  const serverBody = JSON.stringify({ code: "FEATURED_INVALID", error: serverOnly });
+  assert.equal(await checkResponse({ status: 400, text: async () => serverBody }, { sceneIds: [L] }), null);
 });
