@@ -193,7 +193,9 @@ async function stub(status) {
   return { port, close: () => new Promise((r) => srv.close(r)) };
 }
 const health = async (env) => {
-  const api = await startApi({ KRITA_HEALTH_MODE: "bridge", ...env });
+  // S3-H — pin the fixture's intended mode: startApi inherits process.env, and the box AC runs
+  // BRIDGE=firstparty (#43), which turned these vendor expectations red. Each case overrides it.
+  const api = await startApi({ KRITA_HEALTH_MODE: "bridge", BRIDGE: "vendor", ...env });
   try {
     const r = await fetch(`${api.url}/api/health`);
     return { status: r.status, body: await r.json() };

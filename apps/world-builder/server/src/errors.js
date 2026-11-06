@@ -27,7 +27,22 @@ const ISSUE_CODES = [
  * @param {Record<string, unknown>} [extra] top-level structured fields
  */
 export function sendError(res, status, code, message, extra) {
-  return res.status(status).json({ ...(extra || {}), code, error: message });
+  return res.status(status).json({ ...capEcho(extra || {}), code, error: capQuoted(message) });
+}
+
+/** S3-H Leader ruling (D2) — 400 bodies may echo caller values, each capped at 200 characters. */
+export const ECHO_MAX = 200;
+const capStr = (s) => (s.length > ECHO_MAX ? `${s.slice(0, ECHO_MAX - 1)}…` : s);
+/** Deep-cap every string in the structured extras (invalid[], issues[].received, field …). */
+export function capEcho(v, depth = 0) {
+  if (typeof v === "string") return capStr(v);
+  if (depth > 8 || !v || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map((x) => capEcho(x, depth + 1));
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capEcho(x, depth + 1)]));
+}
+/** Cap quoted echoes inside human text (zod: "…, received '<value>'"); server text is untouched. */
+export function capQuoted(m) {
+  return typeof m === "string" ? m.replace(/'([^']{201,})'/g, (_, s) => `'${capStr(s)}'`) : m;
 }
 
 /** Fixed 500 text — details (fs errors carry absolute paths) go to the server log only. */

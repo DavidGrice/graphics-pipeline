@@ -170,13 +170,18 @@ const openScene = async (p, UI, slug) => {
   await sceneReady(p);
 };
 
+// S3-H NIT-H-4 — this test asserts a clean console with ONLY the 3 allowlisted deprecations. The
+// legacy --use-gl=swiftshader path emits "GPU stall due to ReadPixels" driver warnings (not app
+// output); ANGLE SwiftShader does not, so the test runs there instead of filtering GPU/WebGL text.
+const TWO_TAB_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"];
+
 test("#69 browser two-tab: stale Save → prompt; Cancel keeps draft; Reload replaces draft + clears undo", async (t) => {
   const env = browserEnv();
   if (env.skip) return t.skip(env.skip);
   const { chromium, exe, UI, API } = env;
   const fx = await sceneFixture(API, "etag", (c) => [0, 1, 2].map((i) => ({ id: `n${i}`, assetId: c, transform: tf(i) })));
   if (!fx) return t.skip(`SKIP_NO_API: could not register fixtures on ${API}`);
-  const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
+  const br = await chromium.launch({ executablePath: exe, args: TWO_TAB_ARGS });
   try {
     const p = await br.newPage({ viewport: { width: 1280, height: 800 } });
     const con = await watchConsole(p);
@@ -209,7 +214,7 @@ test("#69 browser two-tab: stale Save → prompt; Cancel keeps draft; Reload rep
     // expected network noise only: preflight 404s (fixtures carry no GLB) and the deliberate 412
     const real = con.problems.filter((s) => !/^error: Failed to load resource: the server responded with a status of (404|412)\b/.test(s));
     console.log(`# console ignored by allowlist: ${JSON.stringify(con.ignored)}`);
-    assert.deepEqual(real.filter((s) => !/GPU stall|swiftshader|WebGL/i.test(s)), [], "no other console errors/warnings");
+    assert.deepEqual(real, [], "no other console errors/warnings (NIT-H-4: only the 3 allowlisted deprecations are ignored)");
     await p.close();
   } finally {
     await br.close();
