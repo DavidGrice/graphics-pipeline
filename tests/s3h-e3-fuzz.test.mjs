@@ -90,7 +90,16 @@ async function checkResponse(r, sent) {
   // D2: echoes are allowed within the 200-char cap (a capped echo is the first 199 chars + "…")
   const forms = echoed.flatMap((s) => (s.length > 200 ? [s.slice(0, 199) + "…"] : [s]));
   for (const s of forms.sort((a, b) => b.length - a.length)) if (s.length > 1) scan = scan.split(JSON.stringify(s).slice(1, -1)).join("");
-  for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) if (JSON.parse(`"${m[1]}"`).length > 200 && forms.some((f) => JSON.parse(`"${m[1]}"`).includes(f) && f.length > 200)) return `echo over 200 chars in ${r.status} body`;
+  // any JSON string over 200 chars is an uncapped echo (forms are all ≤200, so never gate on f.length > 200)
+  for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    let s;
+    try {
+      s = JSON.parse(`"${m[1]}"`);
+    } catch {
+      continue;
+    }
+    if (typeof s === "string" && s.length > 200) return `echo over 200 chars in ${r.status} body`;
+  }
   if (ABS.test(scan)) return `absolute path in ${r.status} body: ${text.slice(0, 200)}`;
   if (STACK.test(text)) return `stack trace in ${r.status} body`;
   if (r.status < 400) return null;
@@ -200,4 +209,17 @@ test("echo cap: client values echoed in 400 bodies are kept but capped at 200 ch
     assert.ok(longest(text) <= ECHO_MAX, `${url}: echo capped (${longest(text)})`);
     assert.ok(text.includes("…"), `${url}: truncation marked`);
   }
+});
+
+test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
+  const L = "x".repeat(5000);
+  const uncapped = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: [L] });
+  const problem = await checkResponse({ status: 400, text: async () => uncapped }, { sceneIds: [L] });
+  assert.match(problem ?? "", /echo over 200 chars/);
+  const capped = L.slice(0, 199) + "…";
+  const ok = await checkResponse(
+    { status: 400, text: async () => JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: [capped] }) },
+    { sceneIds: [L] },
+  );
+  assert.equal(ok, null);
 });
