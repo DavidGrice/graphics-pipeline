@@ -87,7 +87,10 @@ async function checkResponse(r, sent) {
   };
   walk(sent);
   let scan = text;
-  for (const s of echoed.sort((a, b) => b.length - a.length)) if (s.length > 1) scan = scan.split(JSON.stringify(s).slice(1, -1)).join("");
+  // D2: echoes are allowed within the 200-char cap (a capped echo is the first 199 chars + "…")
+  const forms = echoed.flatMap((s) => (s.length > 200 ? [s.slice(0, 199) + "…"] : [s]));
+  for (const s of forms.sort((a, b) => b.length - a.length)) if (s.length > 1) scan = scan.split(JSON.stringify(s).slice(1, -1)).join("");
+  for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) if (JSON.parse(`"${m[1]}"`).length > 200 && forms.some((f) => JSON.parse(`"${m[1]}"`).includes(f) && f.length > 200)) return `echo over 200 chars in ${r.status} body`;
   if (ABS.test(scan)) return `absolute path in ${r.status} body: ${text.slice(0, 200)}`;
   if (STACK.test(text)) return `stack trace in ${r.status} body`;
   if (r.status < 400) return null;
@@ -174,4 +177,27 @@ test("#101 fuzz pack import: POST /api/assets with X-Activity-Kind: pack.import"
   await fuzz("pack-import", assetish, (body) =>
     fetch(`${api.url}/api/assets`, { method: "POST", headers: { ...json, "X-Activity-Kind": "pack.import" }, body: JSON.stringify(body) }),
   );
+});
+
+// ---------------------------------------------------------------- Leader ruling (D2): echo cap
+test("echo cap: client values echoed in 400 bodies are kept but capped at 200 chars", async () => {
+  const { capEcho, capQuoted, ECHO_MAX } = await import("../apps/world-builder/server/src/errors.js");
+  assert.equal(ECHO_MAX, 200);
+  const L = "x".repeat(5000);
+  assert.equal(capEcho({ invalid: [L], issues: [{ received: L, path: ["a"] }] }).issues[0].received.length, 200);
+  assert.equal(capEcho({ invalid: [L] }).invalid[0].endsWith("…"), true);
+  assert.equal(capEcho("short"), "short");
+  assert.equal(capQuoted(`bad, received '${L}'`).length, "bad, received ''".length + 200);
+  const longest = (t) => Math.max(0, ...(t.match(/x+/g) || []).map((s) => s.length));
+  for (const [method, url, body] of [
+    ["PUT", "/api/featured", { sceneIds: [L] }],
+    ["POST", "/api/assets", { id: crypto.randomUUID(), slug: "ok-slug", characterType: L }],
+  ]) {
+    const r = await fetch(`${api.url}${url}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const text = await r.text();
+    assert.equal(r.status, 400, url);
+    assert.ok(text.includes("x".repeat(150)), `${url}: echo kept`);
+    assert.ok(longest(text) <= ECHO_MAX, `${url}: echo capped (${longest(text)})`);
+    assert.ok(text.includes("…"), `${url}: truncation marked`);
+  }
 });
