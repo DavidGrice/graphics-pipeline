@@ -226,7 +226,7 @@ test("#66 NIT-E1-1: two GLBs in one folder never share an export time (pipeline.
     assert.deepEqual(Object.keys(j.stages), ["export"]);
     assert.equal(j.glb, path.basename(g));
     assert.equal(j.sha256, sha(g));
-    assert.ok(Number.isInteger(j.stages.export) && j.stages.export >= 0);
+    assert.ok(Number.isInteger(j.stages.export) && j.stages.export >= 0, `stages.export must be a non-negative integer, got ${JSON.stringify(j.stages.export)}`);
     assert.equal(readExportMs(g), j.stages.export);
   }
   assert.ok(!fs.existsSync(path.join(sub, "timings.json")), "no shared per-folder file");
