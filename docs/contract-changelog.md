@@ -96,5 +96,5 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 - **Env:** none (ECHO_ITEMS_MAX is a constant 20, not an env; BULK_MAX lands with #70)
 - **Routes:** none (OpenAPI stays 0.8.0 until #40 / #70 / #28)
 - **Schema:** none (`assetSchemaVersion` stays 3)
-- **Echo (CO-1):** each echoed array in a 4xx body is capped at 20 items; when any item is dropped, top-level `truncated` is the sum of dropped items (absent otherwise). The 200-character client-echo cap is unchanged (S3-H D2).
+- **Echo (CO-1):** each echoed array in a 4xx body is capped at 20 items; when any item is dropped, top-level `truncated` is the sum of dropped items (absent otherwise). The 200-character client-echo cap is unchanged (S3-H D2). Echo walks stop at depth 8: anything deeper is not echoed (a dropped array counts toward `truncated`).
 - **Tests (CO-2):** `tests/reporters/skip-summary.mjs` prints `HEAD=<sha> NODE=<version> RUN=<id|local>` as the first line of `test:s1`, `test:focused`, and `test:ui:repeat`.
