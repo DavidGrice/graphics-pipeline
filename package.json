@@ -2,7 +2,7 @@
   "name": "graphics-pipeline",
   "version": "0.1.0",
   "private": true,
-  "description": "Krita MCP → Blender GLB → MERN + R3F world builder (Sprint 1 MVP)",
+  "description": "Krita MCP \u2192 Blender GLB \u2192 MERN + R3F world builder (Sprint 1 MVP)",
   "workspaces": [
     "packages/*",
     "apps/mcp-krita",
@@ -17,7 +17,7 @@
     "dev:world": "npm run dev -w @graphics-pipeline/world-builder",
     "dev:client": "npm run dev -w @graphics-pipeline/world-builder-client",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test:s1": "node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs tests/s3b-*.test.mjs tests/s3c-*.test.mjs tests/s3d-*.test.mjs tests/s3e-*.test.mjs tests/s3f-*.test.mjs tests/s3g-*.test.mjs tests/s3h-*.test.mjs",
+    "test:s1": "node tests/reporters/print-head.mjs && node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout tests/s1-*.test.mjs tests/s2a-*.test.mjs tests/s2d-*.test.mjs tests/s2e-*.test.mjs tests/s2f-*.test.mjs tests/s2g-*.test.mjs tests/s3a-*.test.mjs tests/s3b-*.test.mjs tests/s3c-*.test.mjs tests/s3d-*.test.mjs tests/s3e-*.test.mjs tests/s3f-*.test.mjs tests/s3g-*.test.mjs tests/s3h-*.test.mjs tests/s3i-*.test.mjs",
     "smoke:live": "bash apps/blender-pipeline/smoke_live.sh",
     "test:s2a": "node --test tests/s2a-*.test.mjs",
     "test:s2b": "node --test tests/s2b-*.test.mjs",
@@ -32,7 +32,8 @@
     "test:ui:repeat": "node scripts/ui-repeat.mjs",
     "seed:ui-populated": "node scripts/seed-ui-populated.mjs",
     "backup": "node scripts/backup.mjs",
-    "restore": "node scripts/restore.mjs"
+    "restore": "node scripts/restore.mjs",
+    "test:focused": "node tests/reporters/print-head.mjs && node --test --test-concurrency=1 --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout tests/s3i-*.test.mjs"
   },
   "devDependencies": {
     "fast-check": "4.10.2",

@@ -76,21 +76,30 @@ const assetish = fc.record(
   { requiredKeys: [] },
 );
 
+/** Walk strings / arrays in a JSON value (S3-I CO-3). */
+function walkStrings(v, out) {
+  if (typeof v === "string") out.push(v);
+  else if (v && typeof v === "object") Object.values(v).forEach((x) => walkStrings(x, out));
+}
+function walkArrays(v, out) {
+  if (Array.isArray(v)) {
+    out.push(v);
+    v.forEach((x) => walkArrays(x, out));
+  } else if (v && typeof v === "object") Object.values(v).forEach((x) => walkArrays(x, out));
+}
+
 /** The contract every response must keep. Returns a problem string or null. */
-async function checkResponse(r, sent) {
+export async function checkResponse(r, sent) {
   const text = await r.text();
   // a value the client itself sent may be echoed back (e.g. FEATURED_INVALID.invalid); only server paths count
   const echoed = [];
-  const walk = (v) => {
-    if (typeof v === "string") echoed.push(v);
-    else if (v && typeof v === "object") Object.values(v).forEach(walk);
-  };
-  walk(sent);
+  walkStrings(sent, echoed);
   let scan = text;
   // D2: echoes are allowed within the 200-char cap (a capped echo is the first 199 chars + "…")
   const forms = echoed.flatMap((s) => (s.length > 200 ? [s.slice(0, 199) + "…"] : [s]));
   for (const s of forms.sort((a, b) => b.length - a.length)) if (s.length > 1) scan = scan.split(JSON.stringify(s).slice(1, -1)).join("");
-  // D2: only on error bodies, flag uncapped echoes of client-sent values (not server-written text, not 2xx payloads)
+  // CO-3 (ii): 200-char client-echo cap on whole-string field echoes only (prefix + ends in …).
+  // Mid-string zod excerpts are exempt (they may come from the middle and need not be a prefix).
   if (r.status >= 400) {
     const over = echoed.filter((s) => s.length > 200);
     for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
@@ -100,9 +109,12 @@ async function checkResponse(r, sent) {
       } catch {
         continue;
       }
-      if (typeof s !== "string" || s.length <= 200) continue;
-      if (over.some((sent) => s === sent || sent.startsWith(s) || s.startsWith(sent.slice(0, 200)) || s.includes(sent.slice(0, 201)))) {
-        return `echo over 200 chars in ${r.status} body`;
+      if (typeof s !== "string") continue;
+      const sentVal = over.find((sv) => s === sv || sv.startsWith(s) || s.startsWith(sv.slice(0, 200)));
+      if (!sentVal) continue;
+      if (s.length > 200) return `echo over 200 chars in ${r.status} body`;
+      if (sentVal.length > 200 && s.length === 200 && !(s.endsWith("…") && sentVal.startsWith(s.slice(0, -1)))) {
+        return `truncated echo is not a prefix ending in … in ${r.status} body`;
       }
     }
   }
@@ -119,6 +131,28 @@ async function checkResponse(r, sent) {
   if (typeof j.code !== "string" || typeof j.error !== "string") return `not flat {code, error}: ${text.slice(0, 160)}`;
   if (!DOC_CODES.has(j.code)) return `undocumented code ${j.code}`;
   for (const v of Object.values(j)) if (v && typeof v === "object" && !Array.isArray(v) && Object.values(v).some((x) => x && typeof x === "object")) return "nested error body";
+  // CO-3 (i): echoed arrays capped at 20; truncated present and large enough when a sent array was cropped
+  const bodyArr = [];
+  walkArrays(j, bodyArr);
+  if (bodyArr.some((a) => a.length > 20)) return `echoed array longer than 20 in ${r.status} body`;
+  if (Object.hasOwn(j, "truncated") && !(Number.isInteger(j.truncated) && j.truncated > 0)) {
+    return `truncated is missing/wrong in ${r.status} body`;
+  }
+  let expected = 0;
+  const sentArr = [];
+  walkArrays(sent, sentArr);
+  const capItem = (x) => (typeof x === "string" && x.length > 200 ? x.slice(0, 199) + "…" : x);
+  for (const sa of sentArr) {
+    if (sa.length <= 20) continue;
+    const prefix = sa.slice(0, 20).map(capItem);
+    if (bodyArr.some((ba) => ba.length === 20 && prefix.every((item, i) => ba[i] === item))) expected += sa.length - 20;
+  }
+  if (expected > 0 && !(Number.isInteger(j.truncated) && j.truncated >= expected)) {
+    return `truncated is missing/wrong in ${r.status} body`;
+  }
+  if (Object.hasOwn(j, "truncated") && expected === 0 && bodyArr.every((a) => a.length < 20)) {
+    return `truncated is missing/wrong in ${r.status} body`;
+  }
   return null;
 }
 
@@ -228,11 +262,38 @@ test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
     { sceneIds: [L] },
   );
   assert.equal(ok, null);
-  // server-written long string (not a client echo) must not trip the oracle
-  const serverOnly = "y".repeat(5000);
-  const serverBody = JSON.stringify({ code: "FEATURED_INVALID", error: serverOnly });
-  assert.equal(await checkResponse({ status: 400, text: async () => serverBody }, { sceneIds: [L] }), null);
-  // mid-string zod-style uncapped echo (the case capQuoted handles)
+});
+
+// CO-3 (iii): mid-string zod excerpt may come from the middle and need not end in … or be a prefix
+test("echo oracle: mid-string zod excerpt is exempt from the prefix/ellipsis client-echo rule", async () => {
+  const L = "x".repeat(5000);
   const mid = JSON.stringify({ code: "FEATURED_INVALID", error: `bad, received '${L}'` });
-  assert.match((await checkResponse({ status: 400, text: async () => mid }, { sceneIds: [L] })) ?? "", /echo over 200 chars/);
+  assert.equal(await checkResponse({ status: 400, text: async () => mid }, { sceneIds: [L] }), null);
+});
+
+// CO-3 (i)/(iii): >20-item array, and truncated missing/wrong
+test("echo oracle: rejects an echoed array longer than 20 or a missing/wrong truncated", async () => {
+  const items = Array.from({ length: 10000 }, () => "x");
+  const tooLong = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: items.slice(0, 21) });
+  assert.match((await checkResponse({ status: 400, text: async () => tooLong }, { invalid: items })) ?? "", /longer than 20|truncated/);
+  const twenty = items.slice(0, 20);
+  const missing = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: twenty });
+  assert.match((await checkResponse({ status: 400, text: async () => missing }, { invalid: items })) ?? "", /truncated is missing\/wrong/);
+  const wrong = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: twenty, truncated: 1 });
+  assert.match((await checkResponse({ status: 400, text: async () => wrong }, { invalid: items })) ?? "", /truncated is missing\/wrong/);
+  const ok = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: twenty, truncated: 9980 });
+  assert.equal(await checkResponse({ status: 400, text: async () => ok }, { invalid: items }), null);
+});
+
+// CO-3 (iv): 2xx and server-written exemptions
+test("echo oracle: 2xx long fields are exempt", async () => {
+  const L = "x".repeat(5000);
+  const body = JSON.stringify({ ok: true, name: L, items: Array.from({ length: 25 }, () => "y") });
+  assert.equal(await checkResponse({ status: 200, text: async () => body }, { name: L }), null);
+});
+
+test("echo oracle: server-written long error text is exempt", async () => {
+  const L = "x".repeat(5000);
+  const serverBody = JSON.stringify({ code: "FEATURED_INVALID", error: "y".repeat(5000) });
+  assert.equal(await checkResponse({ status: 400, text: async () => serverBody }, { sceneIds: [L] }), null);
 });
