@@ -51,7 +51,7 @@ paths:
       responses:
         "200":
           description: |
-            {items: [{at, kind, id, slug?}], total}. kind is one of asset.register, asset.patch,
+            {items: [{at, kind, id, slug?, actor?}], total}. S3-I #143: every non-ops entry written from now on carries actor "local" (older lines have none; ops kinds never do). kind is one of asset.register, asset.patch,
             asset.delete, scene.save, scene.purge, pack.import; S3-G ops kinds carry no id:
             inbox.sweep {removed, kept}, webhook.refused {reason}, webhook.failed. Reads activity.jsonl, then the one
             rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
@@ -292,6 +292,33 @@ paths:
           description: Not found
         "412":
           $ref: "#/components/responses/PreconditionFailed"
+  /api/assets/bulk:
+    post:
+      summary: Bulk register GLBs from an inbox zip (S3-I #70) - rate-limited
+      description: |
+        `{zip:"inbox/<file>.zip"}` (JSON, not multipart). At most BULK_MAX (env, 1..100, default 20)
+        `.glb` entries; other entries are ignored. Whole-request failures write nothing: 400 VALIDATION
+        {field:"zip"|"entries"}, 400 PATH_OUTSIDE_INBOX (path outside inbox/, or a zip-slip / absolute
+        entry name), 413 GLB_TOO_LARGE (zip larger than BULK_MAX * MAX_GLB_MB). 200 body
+        `{results:[{name, ok, id?, slug?, code?}]}` in zip order; a per-entry failure (SLUG_CLASH,
+        GLB_TOO_LARGE, GLB_CORRUPT, MULTI_ARMATURE, VALIDATION, INTERNAL) leaves the other rows intact.
+        Slug is the entry basename without .glb in kebab-case; id is a new UUID; each success records asset.register.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                zip: { type: string }
+      responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "200":
+          description: "{results:[{name, ok, id?, slug?, code?}]}"
+        "400":
+          description: VALIDATION (field zip / entries), PATH_OUTSIDE_INBOX
+        "413":
+          description: GLB_TOO_LARGE - zip larger than BULK_MAX * MAX_GLB_MB
   /api/assets/{id}/nodes:
     patch:
       summary: Scene partial update (S3-I #40)

@@ -93,8 +93,9 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 
 ## S3-I
 - **Codes:** `PRECONDITION_REQUIRED`
-- **Env:** none (ECHO_ITEMS_MAX is a constant 20, not an env; BULK_MAX lands with #70)
-- **Routes:** `PATCH /api/assets/:id/nodes` (#40, `{upsert, remove}`, `If-Match` required: missing → 428 `PRECONDITION_REQUIRED`, stale → 412) (OpenAPI 0.9.0); `/bulk` (#70) and `PUT` preview (#28) land later
+- **Env:** `BULK_MAX` (integer 1..100, default 20; bad value → `CONFIG_INVALID`). ECHO_ITEMS_MAX is a constant 20, not an env.
+- **Routes:** `PATCH /api/assets/:id/nodes` (#40, `{upsert, remove}`, `If-Match` required: missing → 428 `PRECONDITION_REQUIRED`, stale → 412) (OpenAPI 0.9.0); `POST /api/assets/bulk` (#70, `{zip:"inbox/<file>.zip"}` → `{results:[{name, ok, id?, slug?, code?}]}`); `PUT` preview (#28) lands later
 - **Schema:** none (`assetSchemaVersion` stays 3)
+- **Activity (#143):** every non-ops entry written from now on has `actor: "local"` (`GET /api/activity` passes it through; older lines have none and are not back-filled; ops kinds never carry it; no new kinds).
 - **Echo (CO-1):** each echoed array in a 4xx body is capped at 20 items; when any item is dropped, top-level `truncated` is the sum of dropped items (absent otherwise). The 200-character client-echo cap is unchanged (S3-H D2). Echo walks stop at depth 8: anything deeper is not echoed (a dropped array counts toward `truncated`).
 - **Tests (CO-2):** `tests/reporters/skip-summary.mjs` prints `HEAD=<sha> NODE=<version> RUN=<id|local>` as the first line of `test:s1`, `test:focused`, and `test:ui:repeat`.

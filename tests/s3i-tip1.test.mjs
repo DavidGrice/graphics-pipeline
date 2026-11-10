@@ -157,12 +157,12 @@ test("CO-2 test:ui:repeat dry run: first line is the HEAD header", () => {
 });
 
 // ---------------------------------------------------------------- changelog lock for tip1
-test("CO-1 contract-changelog S3-I names the array cap; no new env; only new code is PRECONDITION_REQUIRED (#40)", () => {
+test("CO-1 contract-changelog S3-I names the array cap; only new env BULK_MAX (#70); only new code is PRECONDITION_REQUIRED (#40)", () => {
   const md = fs.readFileSync(path.join(ROOT, "docs/contract-changelog.md"), "utf8");
   assert.match(md, /^## S3-I$/m);
   const sec = md.slice(md.indexOf("## S3-I"));
   assert.match(sec, /\*\*Codes:\*\* `PRECONDITION_REQUIRED`/); // #40 adds the only new code
-  assert.match(sec, /\*\*Env:\*\* none/);
+  assert.match(sec, /\*\*Env:\*\* `BULK_MAX`/); // #70 adds the only new env
   assert.match(sec, /truncated/);
   assert.match(sec, /ECHO_ITEMS_MAX is a constant 20/);
 });
