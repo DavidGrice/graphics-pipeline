@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.8.0
+  version: 0.9.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
@@ -292,6 +292,49 @@ paths:
           description: Not found
         "412":
           $ref: "#/components/responses/PreconditionFailed"
+  /api/assets/{id}/nodes:
+    patch:
+      summary: Scene partial update (S3-I #40)
+      description: |
+        `{upsert:[node...], remove:[id...]}` keyed by node id. upsert replaces or appends;
+        remove tombstones (`deleted: true`); unknown remove ids are no-ops. If-Match is
+        REQUIRED on this route only. Order: 404 NOT_FOUND -> 428 PRECONDITION_REQUIRED
+        (missing; nothing written) -> 400 VALIDATION {field:"If-Match"} (malformed) ->
+        412 PRECONDITION_FAILED {current} (stale) -> 400 body / scene codes -> 200 + ETag.
+        Purge of tombstones stays on PATCH /api/assets/{id}.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                upsert: { type: array, items: { type: object } }
+                remove: { type: array, items: { type: string } }
+      responses:
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "200":
+          description: Updated scene asset
+          headers:
+            ETag:
+              schema: { type: string }
+        "400":
+          description: VALIDATION (field upsert / remove / stage / If-Match), SCENE_ROOT_DELETE, SCENE_NO_LIVE_NODES, SCENE_NODES_MAX, SCENE_RESOLVE
+        "404":
+          description: Not found
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          description: PRECONDITION_REQUIRED - If-Match header missing; body {code, error}; nothing written
   /api/assets/{id}/file:
     get:
       summary: Download GLB/FBX/OBJ

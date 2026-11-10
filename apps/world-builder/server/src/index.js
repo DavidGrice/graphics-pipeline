@@ -871,6 +871,118 @@ app.patch("/api/assets/:id", async (req, res) => {
   }
 });
 
+/**
+ * S3-I #40 — scene partial update `{upsert:[node…], remove:[id…]}` keyed by node id.
+ * If-Match is REQUIRED here only (ruling b): 404 → 428 PRECONDITION_REQUIRED (missing; nothing
+ * written) → 400 VALIDATION {field:"If-Match"} (malformed) → 412 PRECONDITION_FAILED {current}
+ * (stale) → 400 body / scene codes → 200 + ETag. `remove` tombstones (`deleted:true`); unknown ids
+ * are no-ops; purge stays on the full PATCH /api/assets/:id. Records `scene.save`.
+ */
+app.patch("/api/assets/:id/nodes", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const body = req.body ?? {};
+    const col = collection();
+    const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
+    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
+    if (req.headers["if-match"] == null) {
+      return sendError(res, 428, "PRECONDITION_REQUIRED", "If-Match is required on PATCH /api/assets/:id/nodes");
+    }
+    if (rejectIfMatch(req, res, existing)) return;
+
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return sendError(res, 400, "VALIDATION", "body must be an object with upsert and/or remove", { field: "upsert" });
+    }
+    const { upsert, remove } = body;
+    if (upsert !== undefined && !Array.isArray(upsert)) {
+      return sendError(res, 400, "VALIDATION", "upsert must be an array of nodes", { field: "upsert" });
+    }
+    if (remove !== undefined && !Array.isArray(remove)) {
+      return sendError(res, 400, "VALIDATION", "remove must be an array of node ids", { field: "remove" });
+    }
+    const ups = upsert ?? [];
+    const rms = remove ?? [];
+    if (!ups.length && !rms.length) {
+      return sendError(res, 400, "VALIDATION", "at least one of upsert or remove must be a non-empty array", { field: "upsert" });
+    }
+    if (existing.stage !== "scene" || !existing.scene || !Array.isArray(existing.scene.nodes)) {
+      return sendError(res, 400, "VALIDATION", "PATCH /nodes needs a scene asset", { field: "stage" });
+    }
+    for (let i = 0; i < ups.length; i++) {
+      const n = ups[i];
+      if (!n || typeof n !== "object" || Array.isArray(n) || typeof n.id !== "string" || !n.id) {
+        return sendError(res, 400, "VALIDATION", `upsert[${i}] must be a node with a string id`, { field: `upsert[${i}].id` });
+      }
+    }
+    for (let i = 0; i < rms.length; i++) {
+      if (typeof rms[i] !== "string" || !rms[i]) {
+        return sendError(res, 400, "VALIDATION", `remove[${i}] must be a node id string`, { field: `remove[${i}]` });
+      }
+    }
+    const upIds = new Set(ups.map((n) => n.id));
+    if (upIds.size !== ups.length) {
+      return sendError(res, 400, "VALIDATION", "upsert has a duplicate node id", { field: "upsert" });
+    }
+    const overlap = rms.filter((x) => upIds.has(x));
+    if (overlap.length) {
+      return sendError(res, 400, "VALIDATION", "a node id is in both upsert and remove", { field: "remove", ids: overlap });
+    }
+
+    const nodes = structuredClone(existing.scene.nodes);
+    const at = new Map(nodes.map((n, i) => [n?.id, i]));
+    for (const n of ups) {
+      const node = structuredClone(n);
+      if (at.has(node.id)) nodes[at.get(node.id)] = node;
+      else {
+        at.set(node.id, nodes.length);
+        nodes.push(node);
+      }
+    }
+    for (const rid of rms) {
+      if (at.has(rid)) nodes[at.get(rid)] = { ...nodes[at.get(rid)], deleted: true };
+    }
+    const next = {
+      ...existing,
+      scene: { ...existing.scene, nodes },
+      updatedAt: new Date().toISOString(),
+    };
+    if (existing.assetSchemaVersion == null) next.assetSchemaVersion = ASSET_SCHEMA_VERSION;
+
+    if (sendNodeFlagError(res, next.scene)) return;
+    normaliseTombstones(next.scene);
+    const parsed = safeParseAsset(next);
+    if (!parsed.success) return sendValidation(res, parsed);
+    if (sendSceneCapError(res, next.scene)) return;
+    {
+      const resolveDoc = async (idOrSlug) => {
+        if (col) return (await col.findOne({ id: idOrSlug })) || (await col.findOne({ slug: idOrSlug }));
+        for (const doc of memoryAssets.values()) if (doc.id === idOrSlug || doc.slug === idOrSlug) return doc;
+        return null;
+      };
+      const resolveAll = async (idOrSlug) => {
+        if (col) {
+          const byId = await col.find({ id: idOrSlug }).toArray();
+          if (byId.length) return byId;
+          return await col.find({ slug: idOrSlug }).toArray();
+        }
+        const out = [];
+        for (const doc of memoryAssets.values()) if (doc.id === idOrSlug || doc.slug === idOrSlug) out.push(doc);
+        return out;
+      };
+      const sceneErr = await validateSceneChildren(next.scene.nodes, resolveDoc, { resolveAll, normalize: true });
+      if (sceneErr) return sendError(res, 400, "SCENE_RESOLVE", sceneErr);
+    }
+
+    if (col) await col.updateOne({ id }, { $set: next });
+    else memoryAssets.set(id, next);
+    void activity.record("scene.save", next);
+    setEtag(res, next);
+    res.json(next);
+  } catch (err) {
+    sendInternal(req, res, err);
+  }
+});
+
 app.patch("/api/assets/:id/clip-ux", async (req, res) => {
   try {
     const id = req.params.id;
