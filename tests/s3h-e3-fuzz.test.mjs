@@ -88,6 +88,14 @@ function walkArrays(v, out) {
   } else if (v && typeof v === "object") Object.values(v).forEach((x) => walkArrays(x, out));
 }
 
+/** NIT-I-1 — length of a client-value run that is always an uncapped echo (cap is 200). */
+const ECHO_RUN = 201;
+/** Whether `hay` contains any ECHO_RUN-char window of `sent`. */
+function hasRun(hay, sent) {
+  for (let i = 0; i + ECHO_RUN <= sent.length; i++) if (hay.includes(sent.slice(i, i + ECHO_RUN))) return true;
+  return false;
+}
+
 /** The contract every response must keep. Returns a problem string or null. */
 export async function checkResponse(r, sent) {
   const text = await r.text();
@@ -110,6 +118,9 @@ export async function checkResponse(r, sent) {
         continue;
       }
       if (typeof s !== "string") continue;
+      // NIT-I-1: the mid-string exemption is for the prefix/… shape only, never the cap. Any run of
+      // >= 201 consecutive chars of a sent value, wherever it sits (error, issues[].message, …), fails.
+      if (s.length > ECHO_RUN - 1 && over.some((sv) => hasRun(s, sv))) return `uncapped echo (>= ${ECHO_RUN}-char run of a sent value) in ${r.status} body`;
       const sentVal = over.find((sv) => s === sv || sv.startsWith(s) || s.startsWith(sv.slice(0, 200)));
       if (!sentVal) continue;
       if (s.length > 200) return `echo over 200 chars in ${r.status} body`;
@@ -255,7 +266,7 @@ test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
   const L = "x".repeat(5000);
   const uncapped = JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: [L] });
   const problem = await checkResponse({ status: 400, text: async () => uncapped }, { sceneIds: [L] });
-  assert.match(problem ?? "", /echo over 200 chars/);
+  assert.match(problem ?? "", /echo over 200 chars|uncapped echo/);
   const capped = L.slice(0, 199) + "…";
   const ok = await checkResponse(
     { status: 400, text: async () => JSON.stringify({ code: "FEATURED_INVALID", error: "bad", invalid: [capped] }) },
@@ -264,11 +275,24 @@ test("echo oracle: rejects an injected uncapped 5000-char echo", async () => {
   assert.equal(ok, null);
 });
 
-// CO-3 (iii): mid-string zod excerpt may come from the middle and need not end in … or be a prefix
-test("echo oracle: mid-string zod excerpt is exempt from the prefix/ellipsis client-echo rule", async () => {
-  const L = "x".repeat(5000);
-  const mid = JSON.stringify({ code: "FEATURED_INVALID", error: `bad, received '${L}'` });
-  assert.equal(await checkResponse({ status: 400, text: async () => mid }, { sceneIds: [L] }), null);
+// CO-3 (iii) + NIT-I-1: a capped mid-string zod excerpt is exempt from the prefix/… shape rule only;
+// it never lifts the 200-char cap.
+const varied = (n) => Array.from({ length: n }, (_, i) => String.fromCharCode(97 + ((i * 7) % 26))).join("");
+test("echo oracle: capped mid-string zod excerpt (<= 200, from the middle, no …) is accepted", async () => {
+  const L = varied(5000);
+  const excerpt = L.slice(1000, 1180);
+  const mid = JSON.stringify({ code: "VALIDATION", error: `bad, received '${excerpt}'`, issues: [{ message: `got '${excerpt}'` }] });
+  assert.equal(await checkResponse({ status: 400, text: async () => mid }, { name: L }), null);
+});
+test("echo oracle (NIT-I-1): uncapped 5k mid-string echo is flagged in error and in issues[].message", async () => {
+  const L = varied(5000);
+  const inError = JSON.stringify({ code: "VALIDATION", error: `bad, received '${L}'` });
+  assert.match((await checkResponse({ status: 400, text: async () => inError }, { name: L })) ?? "", /uncapped echo|over 200/);
+  const inIssues = JSON.stringify({ code: "VALIDATION", error: "bad", issues: [{ message: `got '${L.slice(700, 1500)}'` }] });
+  assert.match((await checkResponse({ status: 400, text: async () => inIssues }, { name: L })) ?? "", /uncapped echo/);
+  // exactly 201 consecutive sent chars mid-string is enough to fail
+  const run201 = JSON.stringify({ code: "VALIDATION", error: `x '${L.slice(2000, 2201)}' y` });
+  assert.match((await checkResponse({ status: 400, text: async () => run201 }, { name: L })) ?? "", /uncapped echo/);
 });
 
 // CO-3 (i)/(iii): >20-item array, and truncated missing/wrong

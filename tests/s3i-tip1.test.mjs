@@ -158,3 +158,22 @@ test("CO-1 contract-changelog S3-I names the array cap and has no new env/codes 
   assert.match(sec, /truncated/);
   assert.match(sec, /ECHO_ITEMS_MAX is a constant 20/);
 });
+
+// ---------------------------------------------------------------- S-I-1 depth limit
+test("S-I-1 capEcho: nothing past depth 8 is echoed raw; a deep 500-item array is dropped and counted", async () => {
+  const { capEcho } = await import("../apps/world-builder/server/src/errors.js");
+  let deep = Array.from({ length: 500 }, (_, i) => `x${i}`);
+  for (let i = 0; i < 9; i++) deep = { k: deep };
+  // root object is depth 0, so the array sits at depth 9 (Tester's depth-probe shape)
+  const out = capEcho(deep);
+  let v = out;
+  for (let i = 0; i < 8; i++) v = v.k;
+  assert.deepEqual(v.k, [], "array past depth 8 is not echoed");
+  assert.equal(out.truncated, 500);
+  assert.ok(!JSON.stringify(out).includes("x499"));
+  let deepObj = { s: "y".repeat(5000) };
+  for (let i = 0; i < 9; i++) deepObj = { k: deepObj };
+  const o2 = capEcho({ deepObj });
+  assert.ok(!JSON.stringify(o2).includes("y".repeat(201)), "no raw long string past depth 8");
+  assert.equal(o2.truncated, undefined);
+});

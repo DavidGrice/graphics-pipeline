@@ -48,7 +48,16 @@ export function capEcho(v, depth = 0, acc) {
 }
 function capEchoWalk(v, depth, box) {
   if (typeof v === "string") return capStr(v);
-  if (depth > 8 || !v || typeof v !== "object") return v;
+  if (!v || typeof v !== "object") return v;
+  // S-I-1 — past depth 8 the walk stops, but nothing deeper is echoed raw: the value is dropped
+  // (counted in `truncated` when it is a non-empty array, else replaced by null).
+  if (depth > 8) {
+    if (Array.isArray(v)) {
+      box.dropped += v.length;
+      return [];
+    }
+    return null;
+  }
   if (Array.isArray(v)) {
     if (v.length > ECHO_ITEMS_MAX) box.dropped += v.length - ECHO_ITEMS_MAX;
     return v.slice(0, ECHO_ITEMS_MAX).map((x) => capEchoWalk(x, depth + 1, box));
