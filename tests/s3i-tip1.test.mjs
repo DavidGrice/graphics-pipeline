@@ -108,10 +108,18 @@ test("CO-2 dry run: first line is HEAD=<git rev-parse HEAD> NODE=… RUN=…", (
     fs.writeFileSync(f, 'import { test } from "node:test";\ntest("ok", () => {});\n');
     const env = { ...process.env };
     delete env.NODE_TEST_CONTEXT;
-    const cmd = `node tests/reporters/print-head.mjs && node --test --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout ${JSON.stringify(f)}`;
-    const r = spawnSync("bash", ["-lc", cmd], { cwd: ROOT, encoding: "utf8", env });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    const first = (r.stdout || "").split(/\r?\n/)[0];
+    // Same order as the npm scripts (`print-head.mjs && node --test …`), but both steps use this
+    // test's own Node (process.execPath), never a login shell's PATH `node` (Node 22 CI fix).
+    const opts = { cwd: ROOT, encoding: "utf8", env };
+    const h = spawnSync(process.execPath, ["tests/reporters/print-head.mjs"], opts);
+    assert.equal(h.status, 0, h.stdout + h.stderr);
+    const t = spawnSync(
+      process.execPath,
+      ["--test", "--test-reporter=tap", "--test-reporter-destination=stdout", "--test-reporter=./tests/reporters/skip-summary.mjs", "--test-reporter-destination=stdout", f],
+      opts,
+    );
+    assert.equal(t.status, 0, t.stdout + t.stderr);
+    const first = (h.stdout + t.stdout).split(/\r?\n/)[0];
     const run = process.env.GITHUB_RUN_ID || "local";
     assert.equal(first, `HEAD=${sha} NODE=${process.version} RUN=${run}`);
   } finally {
@@ -149,11 +157,11 @@ test("CO-2 test:ui:repeat dry run: first line is the HEAD header", () => {
 });
 
 // ---------------------------------------------------------------- changelog lock for tip1
-test("CO-1 contract-changelog S3-I names the array cap and has no new env/codes in tip1", () => {
+test("CO-1 contract-changelog S3-I names the array cap; no new env; only new code is PRECONDITION_REQUIRED (#40)", () => {
   const md = fs.readFileSync(path.join(ROOT, "docs/contract-changelog.md"), "utf8");
   assert.match(md, /^## S3-I$/m);
   const sec = md.slice(md.indexOf("## S3-I"));
-  assert.match(sec, /\*\*Codes:\*\* none/);
+  assert.match(sec, /\*\*Codes:\*\* `PRECONDITION_REQUIRED`/); // #40 adds the only new code
   assert.match(sec, /\*\*Env:\*\* none/);
   assert.match(sec, /truncated/);
   assert.match(sec, /ECHO_ITEMS_MAX is a constant 20/);

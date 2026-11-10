@@ -237,9 +237,9 @@ test("D1 §1 NIT-F-1 placement: below, flip above, clamp left to [8, iw − w �
 });
 
 // ---------------------------------------------------------------- locks
-test("E2 locks: client-only (no new route / code), OpenAPI 0.8.0, exactly 6 SKIP codes, schema 3", () => {
+test("E2 locks: client-only (no new route / code), OpenAPI 0.9.0 (S3-I), exactly 6 SKIP codes, schema 3", () => {
   const openapi = fs.readFileSync(path.join(ROOT, "docs/openapi.yaml"), "utf8");
-  assert.match(openapi, /version:\s*["']?0\.8\.0/);
+  assert.match(openapi, /version:\s*["']?0\.9\.0/); // S3-I #40 bump
   const guide = fs.readFileSync(path.join(ROOT, "docs/AGENT_GUIDE.md"), "utf8");
   assert.ok(guide.length > 0);
   const rep = fs.readFileSync(path.join(ROOT, "tests/reporters/skip-summary.mjs"), "utf8");
