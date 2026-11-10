@@ -4,7 +4,36 @@
  * known SKIP_* code. Used next to the TAP reporter:
  *   node --test --test-reporter=tap --test-reporter-destination=stdout \
  *        --test-reporter=./tests/reporters/skip-summary.mjs --test-reporter-destination=stdout …
+ * S3-I CO-2 — also exports the run header printed as the first line of test:s1, test:focused,
+ * and test:ui:repeat: HEAD=<sha> NODE=<version> RUN=<id|local>.
  */
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+export function gitHead(cwd = REPO_ROOT) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+/** First line of s1 / focused / ui-repeat. `sha` is `git rev-parse HEAD`. */
+export function formatRunHeader({
+  sha = gitHead(),
+  node = process.version,
+  run = process.env.GITHUB_RUN_ID || "local",
+} = {}) {
+  return `HEAD=${sha} NODE=${node} RUN=${run}`;
+}
+
+export function printRunHeader(stream = process.stdout) {
+  stream.write(`${formatRunHeader()}\n`);
+}
+
 export const SKIP_CODES = [
   "SKIP_NO_BLENDER",
   "SKIP_NO_API",
