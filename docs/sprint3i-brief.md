@@ -21,15 +21,15 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 ## 3. CO-1: per-array echo cap (E1)
 - `ECHO_ITEMS_MAX` is a **constant 20**, not an env. `capEcho` already caps strings at 200 and depth at 8; it now also keeps only the first 20 items of every echoed array (`invalid[]`, `issues[]`, and any future echoed array).
 - When any item is dropped, the body gains a top-level number `truncated` equal to the **sum of dropped items across all echoed arrays**. The field is absent when nothing is dropped. The body stays flat; no new code.
-- **Tests:** a 10k-entry `invalid[]` returns 20 items plus `truncated: 99980`; two capped arrays sum their drops; strings inside still end in `…` and are ≤200.
+- **Tests:** a 10k-entry `invalid[]` returns 20 items plus `truncated: 9980`; two capped arrays sum their drops; strings inside still end in `…` and are ≤200.
 
 ## 4. #40: scene partial update (E1)
 - New route `PATCH /api/assets/:id/nodes` with `{upsert:[node…], remove:[id…]}`, keyed by node id. At least one of `upsert` or `remove` must be a non-empty array, else 400 `VALIDATION {field:"upsert"}`.
 - The asset must be `stage=scene`; any other stage → 400 `VALIDATION {field:"stage"}`. Nodes use the existing `SceneNodeSchema`. The result is checked with the same `validateSceneChildren` and live-node cap (`SCENE_NODES_MAX` / `SCENE_MAX_NODES`) as a full PATCH. Response is the updated doc plus the new strong `ETag`.
-- `upsert` replaces a node of that id or appends it. `remove` **tombstones** (`deleted: true`), same as author Delete; unknown ids are no-ops. An id in both `upsert` and `remove` → 400 `VALIDATION {field:"remove"}`. Tombstoning the root → `SCENE_ROOT_DELETE`. Leaving no live nodes → `SCENE_NO_LIVE_NODES`. Purge of tombstones stays on the existing full `PATCH /api/assets/:id`.
+- `upsert` replaces a node of that id or appends it. `remove` **tombstones** (`deleted: true`), same as author Delete; unknown ids are no-ops. An id in both `upsert` and `remove` → 400 `VALIDATION {field:"remove", ids:[…]}` (`ids` is capped by CO-1). A duplicate id inside `upsert` → 400 `VALIDATION {field:"upsert"}`. A bad element → 400 `VALIDATION` with `field` `upsert[i].id` or `remove[i]`. Tombstoning the root → `SCENE_ROOT_DELETE`. Leaving no live nodes → `SCENE_NO_LIVE_NODES`. Purge of tombstones stays on the existing full `PATCH /api/assets/:id`.
 - **`If-Match` is required on this route only.** Existing `PATCH`/`DELETE` `/api/assets/:id` (+ clip-ux) stay opt-in. Check order: 404 `NOT_FOUND` → 428 `PRECONDITION_REQUIRED` (header missing; body `{code, error}`; nothing written) → 400 `VALIDATION {field:"If-Match"}` (malformed) → 412 `PRECONDITION_FAILED {current}` (stale) → 400 body / scene codes → 200 + `ETag`.
 - A successful patch records `scene.save`. CORS already exposes `ETag` and allows `If-Match`.
-- **Tests:** 404; missing header → 428 and nothing written; stale → 412 and nothing written; match → 200 and a new ETag; overlap; unknown `remove` is a no-op; not-a-scene; live-node cap; root / last-live tombstone.
+- **Tests:** 404; missing header → 428 and nothing written; stale → 412 and nothing written; match → 200 and a new ETag; overlap; duplicate upsert id; unknown `remove` is a no-op; not-a-scene; live-node cap; root / last-live tombstone.
 
 ## 5. #143: audit actor (E1)
 - Additive optional `actor` on every non-ops activity entry (`asset.register`, `asset.patch`, `asset.delete`, `scene.save`, `scene.purge`, `pack.import`). Value is the literal `"local"` until #73 (API keys) lands — there is no key id today. Never a secret, never a path.

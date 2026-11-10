@@ -5,7 +5,7 @@
 ## §1 CO-1 per-array echo cap (E1)
 - `ECHO_ITEMS_MAX` is a **constant 20**, not an env. `capEcho` already caps strings at 200 and depth at 8; it now also keeps the first 20 items of every echoed array (`invalid[]`, `issues[]`, and any future echoed array).
 - When any item is dropped, add top-level numeric `truncated` equal to the **sum of dropped items across all echoed arrays**. Absent when nothing is dropped. Body stays flat `{code, error, ...extra}`; no new code.
-- A 10k-entry `invalid[]` returns 20 items plus `truncated: 99980`. Strings inside still end in `…` and are ≤200.
+- A 10k-entry `invalid[]` returns 20 items plus `truncated: 9980`. Strings inside still end in `…` and are ≤200.
 
 ## §2 #40 scene partial update (E1)
 - New route `PATCH /api/assets/:id/nodes` with `{upsert:[node…], remove:[id…]}`, keyed by node id. At least one of `upsert` or `remove` must be a non-empty array, else 400 `VALIDATION {field:"upsert"}`.
@@ -13,6 +13,7 @@
 - `upsert` replaces a node of that id or appends it. `remove` **tombstones** (`deleted: true`), same as author Delete; unknown ids are no-ops. An id in both `upsert` and `remove` → 400 `VALIDATION {field:"remove"}`. Tombstoning the root → `SCENE_ROOT_DELETE`. Leaving no live nodes → `SCENE_NO_LIVE_NODES`. Purge of tombstones stays on the existing full `PATCH /api/assets/:id`.
 - **`If-Match` is required on this route only.** Existing `PATCH`/`DELETE` `/api/assets/:id` and clip-ux stay opt-in. Check order: 404 `NOT_FOUND` → 428 `PRECONDITION_REQUIRED` (header missing; body `{code, error}`; nothing written) → 400 `VALIDATION {field:"If-Match"}` (malformed) → 412 `PRECONDITION_FAILED {current}` (stale) → 400 body / scene codes → 200 + `ETag`.
 - A successful patch records `scene.save`.
+- As shipped (`752a060`): a duplicate id inside `upsert` → 400 `VALIDATION {field:"upsert"}`; a non-node `upsert[i]` → `{field:"upsert[i].id"}`; a non-string `remove[i]` → `{field:"remove[i]"}`; the overlap 400 also echoes `ids:[…]` (capped per §1). A child that fails `validateSceneChildren` → 400 `SCENE_RESOLVE`, same as the full PATCH.
 
 ## §3 #143 audit actor (E1)
 - Additive optional `actor` on every non-ops activity entry: `asset.register`, `asset.patch`, `asset.delete`, `scene.save`, `scene.purge`, `pack.import`. Value is the literal `"local"` until #73 (API keys) lands — there is no key id today. Never a secret, never a path.
