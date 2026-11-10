@@ -1,7 +1,7 @@
 /**
  * S3-F #128 — append-only activity feed (Leader ruling a; D2 §#128).
  *
- *   <DATA_ROOT>/activity.jsonl  one JSON object per line: {at, kind, id, slug?}  (D2 @1f687da / R1 §3)
+ *   <DATA_ROOT>/activity.jsonl  one JSON object per line: {at, kind, id, slug?, actor?}  (D2 @1f687da / R1 §3; actor S3-I #143)
  *   kind ∈ asset.register | asset.patch | asset.delete | scene.save | scene.purge | pack.import.
  *   S3-G: ops kinds inbox.sweep {removed, kept} | webhook.refused {reason} | webhook.failed (no id).
  *   Never bodies, paths, IPs or headers.
@@ -46,6 +46,8 @@ export function opsEntry(kind, fields = {}, at = new Date()) {
   }
   return e;
 }
+/** S3-I #143 — who did it. Literal "local" until API keys (#73) land; never a secret or a path. */
+export const ACTIVITY_ACTOR = "local";
 export const ACTIVITY_MAX_LINES_DEFAULT = 10000;
 export const ACTIVITY_LIMIT_DEFAULT = 20;
 export const ACTIVITY_LIMIT_MAX = 100;
@@ -95,6 +97,7 @@ export function activityEntry(kind, doc, at = new Date()) {
   if (!ACTIVITY_KINDS.includes(kind) || !doc || typeof doc.id !== "string") return null;
   const e = { at: at.toISOString(), kind, id: doc.id };
   if (typeof doc.slug === "string" && doc.slug) e.slug = doc.slug;
+  e.actor = ACTIVITY_ACTOR;
   return e;
 }
 
@@ -120,6 +123,8 @@ function parseFile(file) {
       if (typeof e.id !== "string") continue;
       const out = { at: e.at, kind: e.kind, id: e.id };
       if (typeof e.slug === "string") out.slug = e.slug;
+      // S3-I #143: older lines have no actor and are not back-filled; a stored actor must be a short token
+      if (typeof e.actor === "string" && /^[a-z0-9_.-]{1,32}$/.test(e.actor)) out.actor = e.actor;
       items.push(out);
     } catch {
       /* malformed line — skipped, never fatal */

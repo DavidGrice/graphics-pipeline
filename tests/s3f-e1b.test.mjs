@@ -24,7 +24,7 @@ const feed = async (api, q = "") => {
 const lines = (f) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8").split("\n").filter(Boolean) : []);
 
 // ---------------------------------------------------------------- #128
-test("#128 each kind written once ({at, kind, id, slug?}, no bodies); feed newest-first {items,total}", async () => {
+test("#128 each kind written once ({at, kind, id, slug?, actor}, no bodies); feed newest-first {items,total}", async () => {
   const api = await startApi();
   try {
     const a = runId("act-a");
@@ -51,7 +51,8 @@ test("#128 each kind written once ({at, kind, id, slug?}, no bodies); feed newes
       "asset.register", "pack.import", "asset.patch", "scene.save", "scene.save", "scene.purge", "asset.delete",
     ]);
     for (const e of raw) {
-      assert.deepEqual(Object.keys(e).sort(), ["at", "id", "kind", "slug"], "only {at, kind, id, slug}");
+      assert.deepEqual(Object.keys(e).sort(), ["actor", "at", "id", "kind", "slug"], "only {at, kind, id, slug, actor} (S3-I #143 adds actor)");
+      assert.equal(e.actor, "local");
       assert.match(e.at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, "ISO-8601 UTC");
     }
     assert.deepEqual(raw.map((e) => e.id), [a, b, a, sc, sc, sc, b]);
