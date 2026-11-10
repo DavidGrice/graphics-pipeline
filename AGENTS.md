@@ -22,7 +22,8 @@ Links, never copies: the source of truth is the linked file. If this section and
 
 ### Box paths (the shared Linux box)
 - Blender **5.2.3 LTS**: `/home/box/tools/blender` (set `BLENDER_BIN` to it; goldens are pinned to this version)
-- Krita: `/home/box/tools/krita` (only for live bridge checks; CI uses `BRIDGE=mock`)
+- Krita: `/home/box/tools/krita` (only for live bridge checks)
+- Bridge (S3-H #43): the Linux box AC runs `BRIDGE=firstparty` (`KRITA_FP_PORT=19876`, see [setup-linux §4](docs/setup-linux.md)); CI runs `BRIDGE=mock`; unset means `vendor`
 - Lint / scan tools: `/home/box/tools/bin` (`actionlint`, `shellcheck`, `gitleaks`); put it on `PATH` or set `ACTIONLINT_BIN` / `SHELLCHECK_BIN` / `GITLEAKS_BIN`
 - Node **24** is the default; re-run the suite on Node 22 before a tip lands
 - Ports: the Tester owns 8787 / 5173; Engineer lanes use 8788 (API) / 5174 (vite)

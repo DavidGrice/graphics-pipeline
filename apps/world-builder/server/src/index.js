@@ -20,7 +20,7 @@ import {
 } from "@graphics-pipeline/asset-schema";
 import { parseInboxTtlHours, sweepInbox, referencedInboxNames, INBOX_SWEEP_INTERVAL_MS } from "./inboxSweep.js";
 import { parseWebhookConfig, createWebhook } from "./webhook.js";
-import { createActivityLog, parseActivityLimit, parseActivityMaxLines } from "./activity.js";
+import { createActivityLog, parseActivityLimit, parseActivityBefore, parseActivityMaxLines } from "./activity.js";
 import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
 import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
 
@@ -42,6 +42,7 @@ function normaliseAltText(raw) {
 import { validateSceneChildren } from "./sceneResolve.js";
 import { registerOpenApiRoutes } from "./openapi.js";
 import { sendError, sendInternal, sendValidation } from "./errors.js";
+import { etagOf, parseIfMatch, ifMatchOk } from "./etag.js";
 import {
   ConfigError,
   corsAllowlist,
@@ -375,7 +376,8 @@ app.get("/api/health", async (_req, res) => {
 
 /**
  * S3-F #128 (D2) — GET /api/activity?limit= (default 20, integer 1..100, else 400 VALIDATION
- * {field: "limit"}). Newest-first `{items: [{at, kind, id, slug?}], total}` (current file, then
+ * {field: "limit"}). S3-H NIT-H-2 — optional `before=` ISO-8601; items with `at` strictly older
+ * (malformed → 400 VALIDATION {field:"before"}). Newest-first `{items, total}` (current file, then
  * activity.1.jsonl). GET → not rate-limited.
  */
 app.get("/api/activity", async (req, res) => {
@@ -384,7 +386,11 @@ app.get("/api/activity", async (req, res) => {
     if (limit === null) {
       return sendError(res, 400, "VALIDATION", "limit must be an integer 1..100", { field: "limit" });
     }
-    res.json(await activity.read(limit));
+    const beforeParsed = parseActivityBefore(req.query.before);
+    if (!beforeParsed.ok) {
+      return sendError(res, 400, "VALIDATION", "before must be an ISO-8601 timestamp", { field: "before" });
+    }
+    res.json(await activity.read(limit, beforeParsed.before));
   } catch (err) {
     sendInternal(req, res, err);
   }
@@ -427,6 +433,31 @@ app.put("/api/featured", async (req, res) => {
     sendInternal(req, res, err);
   }
 });
+
+
+/** S3-H #69 — set strong ETag on a successful read/write. */
+function setEtag(res, doc) {
+  res.setHeader("ETag", etagOf(doc));
+}
+
+/**
+ * S3-H #69 — opt-in If-Match after 404. Returns true when the response was already sent
+ * (400 VALIDATION or 412 PRECONDITION_FAILED). Absent header → proceed.
+ */
+function rejectIfMatch(req, res, existing) {
+  const parsed = parseIfMatch(req.headers["if-match"]);
+  if (parsed == null) return false;
+  if (!parsed.ok) {
+    sendError(res, 400, "VALIDATION", "If-Match must be a quoted ETag or *", { field: "If-Match" });
+    return true;
+  }
+  const current = etagOf(existing);
+  if (!ifMatchOk(parsed, current)) {
+    sendError(res, 412, "PRECONDITION_FAILED", "resource has changed", { current });
+    return true;
+  }
+  return false;
+}
 
 app.get("/api/assets", async (req, res) => {
   try {
@@ -534,6 +565,7 @@ app.get("/api/assets/:id", async (req, res) => {
       ? await col.findOne({ id: req.params.id })
       : memoryAssets.get(req.params.id) ?? null;
     if (!doc) return sendError(res, 404, "NOT_FOUND", "not found");
+    setEtag(res, doc); // S3-H #69
     res.json(doc);
   } catch (err) {
     sendInternal(req, res, err);
@@ -682,6 +714,8 @@ app.patch("/api/assets/:id", async (req, res) => {
       ? await col.findOne({ id })
       : memoryAssets.get(id) ?? null;
     if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
+    // S3-H #69 — If-Match after 404, before body validation
+    if (rejectIfMatch(req, res, existing)) return;
 
     for (const forbidden of ["formats", "clips", "rig", "stage", "id", "slug"]) {
       if (Object.prototype.hasOwnProperty.call(body, forbidden)) {
@@ -830,6 +864,7 @@ app.patch("/api/assets/:id", async (req, res) => {
     } else {
       void activity.record("asset.patch", next);
     }
+    setEtag(res, next);
     res.json(next);
   } catch (err) {
     sendInternal(req, res, err);
@@ -840,6 +875,16 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body ?? {};
+    const col = collection();
+    const existing = col
+      ? await col.findOne({ id })
+      : memoryAssets.get(id) ?? null;
+    // S3-H #69 — 404 before 412 before body validation
+    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
+    if (rejectIfMatch(req, res, existing)) return;
+    if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
+      return sendError(res, 400, "PATCH_FORBIDDEN_FIELD", "clip-ux cannot modify clipDurations (probe-only write)");
+    }
     const clipUx = {
       defaultClip:
         typeof body.defaultClip === "string" ? body.defaultClip : undefined,
@@ -856,16 +901,8 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
         clipUx[key] = body[key];
       }
     }
-    if (Object.prototype.hasOwnProperty.call(body, "clipDurations")) {
-      return sendError(res, 400, "PATCH_FORBIDDEN_FIELD", "clip-ux cannot modify clipDurations (probe-only write)");
-    }
     const uxParsed = ClipUxSchema.safeParse(clipUx);
     if (!uxParsed.success) return sendValidation(res, uxParsed);
-    const col = collection();
-    const existing = col
-      ? await col.findOne({ id })
-      : memoryAssets.get(id) ?? null;
-    if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
     const next = {
       ...existing,
       clipUx,
@@ -877,6 +914,7 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
       memoryAssets.set(id, next);
     }
     void activity.record("asset.patch", next); // S3-F #128
+    setEtag(res, next);
     res.json(next);
   } catch (err) {
     sendInternal(req, res, err);
@@ -894,6 +932,7 @@ app.delete("/api/assets/:id", async (req, res) => {
     const col = collection();
     const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
     if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
+    if (rejectIfMatch(req, res, existing)) return;
     const all = col ? await col.find({ stage: "scene" }).toArray() : [...memoryAssets.values()];
     // S3-E #41 (R1 §6) — tombstoned references still block (restore must not dangle).
     const hits = all

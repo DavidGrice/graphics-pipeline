@@ -103,3 +103,47 @@ export function cachedProbe(glbAbs, { dataRoot, env = process.env, probe = probe
   }
   return { probed, probeCache: "miss", sha256: sha };
 }
+
+/**
+ * S3-H #133 — same as cachedProbe, but misses go through the worker pool (event-loop friendly).
+ * Cache hits never touch a worker. `probe` override still runs in-process (tests).
+ * @returns {Promise<{ probed: object, probeCache: "hit"|"miss"|"off", sha256: string|null }>}
+ */
+export async function cachedProbeAsync(glbAbs, { dataRoot, env = process.env, probe, pool } = {}) {
+  if (!probeCacheEnabled(env)) {
+    const run = probe || (pool ? (f) => pool.probe(f) : null);
+    if (!run) {
+      const { sharedProbePool } = await import("./probe_pool.mjs");
+      const probed = await sharedProbePool(env).probe(glbAbs);
+      return { probed, probeCache: "off", sha256: null };
+    }
+    const probed = await run(glbAbs);
+    return { probed, probeCache: "off", sha256: null };
+  }
+  const sha = sha256File(glbAbs);
+  let file = null;
+  try {
+    file = entryPath(dataRoot, sha);
+  } catch {
+    file = null;
+  }
+  if (file && fs.existsSync(file)) {
+    const hit = readEntry(file, sha);
+    if (hit) return { probed: hit, probeCache: "hit", sha256: sha };
+  }
+  let probed;
+  if (probe) {
+    probed = await probe(glbAbs);
+  } else {
+    const poolRef = pool || (await import("./probe_pool.mjs")).sharedProbePool(env);
+    probed = await poolRef.probe(glbAbs);
+  }
+  if (file && (probed?.armatureCount ?? 0) <= 1 && validProbe(probed)) {
+    try {
+      writeEntry(file, sha, probed);
+    } catch (err) {
+      console.warn(`WARN probe cache write skipped: ${err?.code || "write failed"}`);
+    }
+  }
+  return { probed, probeCache: "miss", sha256: sha };
+}

@@ -112,38 +112,80 @@ test("#94 static wiring: read-only panel below the list, uses sort/limit, empty 
   const panel = app.indexOf('data-testid="recent-imports"');
   const reg = app.indexOf("Register asset\n");
   assert.ok(list > 0 && panel > list && panel < reg, "below the list, above Register");
-  assert.match(app, /\/api\/assets\?sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/);
+  assert.match(app, /\/api\/activity\?limit=100/);
+  assert.match(app, /\/api\/assets\?sort=-createdAt&limit=\$\{RECENT_IMPORTS_LIMIT\}/); // fresh-store fallback
   assert.match(app, /No imports yet\./);
   const block = app.slice(panel, app.indexOf("</details>", panel));
   assert.ok(!/method:\s*"(POST|PATCH|DELETE)"/.test(block), "read-only");
-  assert.match(block, /title=\{a\.createdAt/);
+  assert.match(block, /title=\{a\.registerAt \?\? a\.createdAt/);
 });
 
 test("#94 browser: panel shows the newest first; clicking a row selects it", async (t) => {
   const env = browserEnv();
   if (env.skip) return t.skip(env.skip);
   const { chromium, exe, UI, API } = env;
-  const id = runId("r98");
-  const slug = `s3d-recent-${process.pid}`;
-  const body = billboardBody(id, slug);
-  delete body.createdAt;
-  delete body.updatedAt;
-  const r = await fetch(`${API}/api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (r.status !== 201) return t.skip(`SKIP_NO_API: could not register on ${API} (${r.status})`);
+  // S3-H NIT-H-3 — concurrency-safe. Other UI files register on the same API in parallel, so
+  // "first row" is not ours and a burst of >20 registers can push ours out of the window.
+  // Each attempt registers a fresh asset, waits for its async register activity line (the panel's
+  // source), loads the page and looks for OUR row; only a burst that provably pushed it out retries.
+  const ids = [];
+  const reg = async (n) => {
+    const id = runId(`r98-${n}`);
+    const slug = `s3d-recent-${process.pid}-${n}`;
+    const body = billboardBody(id, slug);
+    delete body.createdAt;
+    delete body.updatedAt;
+    const r = await fetch(`${API}/api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status !== 201) return null;
+    ids.push(id);
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      const act = await (await fetch(`${API}/api/activity?limit=100`)).json().catch(() => null);
+      if ((act?.items ?? []).some((i) => i.id === id && i.kind === "asset.register")) break;
+      assert.ok(Date.now() < deadline, "register activity line never written");
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    return { id, slug };
+  };
+  const first = await reg(0);
+  if (!first) return t.skip(`SKIP_NO_API: could not register on ${API}`);
   const br = await chromium.launch({ executablePath: exe, args: CHROME_ARGS });
   try {
     const p = await br.newPage({ viewport: { width: 1280, height: 800 } });
-    await p.goto(UI, { waitUntil: "networkidle" });
+    let mine = null;
+    let slug = "";
+    for (let n = 0; n < 4 && !mine; n++) {
+      const a = n === 0 ? first : await reg(n);
+      assert.ok(a, "re-register");
+      slug = a.slug;
+      await p.goto(UI, { waitUntil: "networkidle" });
+      const rows = p.getByTestId("recent-import-row");
+      const cand = rows.filter({ hasText: slug });
+      try {
+        // deterministic: the panel has rendered (rows or the empty state) AND ours is there
+        await cand.first().waitFor({ timeout: 20000 });
+        mine = cand.first();
+      } catch {
+        // out of the window: only legitimate if ≥20 newer registers landed after ours
+        const act = await (await fetch(`${API}/api/activity?limit=100`)).json();
+        const regs = (act.items ?? []).filter((i) => i.kind === "asset.register");
+        const pos = regs.findIndex((i) => i.id === a.id);
+        assert.ok(pos === -1 || pos >= 20 || (await rows.count()) === 20, `row ${slug} missing at register position ${pos}`);
+      }
+    }
+    assert.ok(mine, "own row visible within 4 attempts");
     const rows = p.getByTestId("recent-import-row");
-    await rows.first().waitFor({ timeout: 10000 });
     assert.ok((await rows.count()) <= 20);
-    assert.match(await rows.first().textContent(), new RegExp(slug));
-    assert.match(await rows.first().textContent(), /just now/);
-    await rows.first().click();
+    assert.match(await mine.textContent(), /just now/);
+    // newest first: every row above ours is at least as new
+    const times = await rows.evaluateAll((els) => els.map((e) => [e.textContent, e.querySelector(".recent-time")?.getAttribute("title") ?? ""]));
+    const at = times.findIndex(([txt]) => txt.includes(slug));
+    for (const [, ts] of times.slice(0, at)) assert.ok(Date.parse(ts) >= Date.parse(times[at][1]), `row above is newer: ${ts}`);
+    await mine.click();
     assert.match(await p.locator(".asset-title").textContent(), new RegExp(slug));
     await p.close();
   } finally {
     await br.close();
-    await fetch(`${API}/api/assets/${id}`, { method: "DELETE" });
+    for (const id of ids) await fetch(`${API}/api/assets/${id}`, { method: "DELETE" }).catch(() => {});
   }
 });

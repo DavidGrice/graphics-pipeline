@@ -75,11 +75,13 @@ test -x /home/box/tools/blender || echo "BLENDER_BIN missing"
 ## 4. Krita bridge on Linux (box)
 
 ```bash
-# Vendor (default) — MCP krita-mcp / facade → 127.0.0.1:9797
+# Box AC default (S3-H #43): BRIDGE=firstparty. CI: BRIDGE=mock. Unset = vendor.
+
+# Vendor (unset default) — MCP krita-mcp / facade → 127.0.0.1:9797
 export BRIDGE=vendor
 export KRITA_MCP_PORT=9797
 
-# Firstparty — graphics_fp_bridge in pykrita → :19876
+# Firstparty (box AC) — graphics_fp_bridge in pykrita → :19876
 export BRIDGE=firstparty
 export KRITA_FP_PORT=19876
 # Pack: bash apps/krita-plugin/pack.sh

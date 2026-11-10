@@ -135,6 +135,10 @@ export function ambiguousSlugOf(message: string | null | undefined): string | nu
 
 // ---------------------------------------------------------------- #94 recent imports
 export const RECENT_IMPORTS_LIMIT = 20;
+/** S3-H NIT-H-2 — each /api/activity page uses the existing limit cap. */
+export const ACTIVITY_PAGE_LIMIT = 100;
+/** S3-H NIT-H-2 — stop paging after this many /api/activity fetches. */
+export const ACTIVITY_MAX_PAGES = 5;
 
 type Dated = { createdAt?: string };
 
@@ -153,6 +157,29 @@ export function sortNewestFirst<T extends Dated>(list: T[]): T[] {
 
 export function recentImports<T extends Dated>(list: T[], limit = RECENT_IMPORTS_LIMIT): T[] {
   return sortNewestFirst(list).slice(0, limit);
+}
+
+/** Activity entry shape for CO-1 recent-by-register (S3-H). */
+export type RecentActivityEntry = { kind?: string; id?: string; at?: string };
+
+/**
+ * S3-H CO-1 — newest-first unique `{id, at?}` from `asset.register` activity entries.
+ * Activity is assumed newest-first; the first occurrence of each id wins (de-dupe).
+ */
+export function recentRegisterIds(
+  items: RecentActivityEntry[] | null | undefined,
+  limit = RECENT_IMPORTS_LIMIT,
+): { id: string; at?: string }[] {
+  const out: { id: string; at?: string }[] = [];
+  const seen = new Set<string>();
+  for (const it of items ?? []) {
+    if (it?.kind !== "asset.register" || typeof it.id !== "string" || !it.id) continue;
+    if (seen.has(it.id)) continue;
+    seen.add(it.id);
+    out.push({ id: it.id, at: typeof it.at === "string" ? it.at : undefined });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 export function warningsCount(a: { importMeta?: { warnings?: unknown[] } } | null | undefined): number {

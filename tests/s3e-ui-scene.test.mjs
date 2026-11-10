@@ -102,6 +102,8 @@ test("#38/#41/#35 browser 1280: counter, tombstone row, root Delete disabled, Re
     // replace n1 → c2, undo, replace again
     await p.locator(".scene-node-list button.scene-node").nth(1).click();
     await p.getByTestId("node-replace-n1").click();
+    // CO-2 — on a populated store the Replace list is capped at 30; search for the fixture slug.
+    await p.locator('.replace-picker input[type="search"]').fill(fx.slugs.c2);
     assert.equal(await p.getByTestId(`replace-pick-${fx.slugs.c1}`).count(), 0, "current asset excluded");
     await p.getByTestId(`replace-pick-${fx.slugs.c2}`).click();
     const undo = p.getByTestId("node-replace-undo");
@@ -111,8 +113,10 @@ test("#38/#41/#35 browser 1280: counter, tombstone row, root Delete disabled, Re
     await undo.click();
     assert.equal(await undo.count(), 0);
     await p.getByTestId("node-replace-n1").click();
+    await p.locator('.replace-picker input[type="search"]').fill(fx.slugs.scene);
     await p.getByTestId(`replace-pick-${fx.slugs.scene}`).click();
     assert.match(await p.locator(".replace-picker .err").textContent(), /self-reference/);
+    await p.locator('.replace-picker input[type="search"]').fill(fx.slugs.c2);
     await p.getByTestId(`replace-pick-${fx.slugs.c2}`).click();
     // purge with inline confirm, then Save (Save itself never purges — purge is explicit)
     await p.getByTestId("nodes-purge").click();

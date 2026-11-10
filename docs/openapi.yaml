@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Graphics Pipeline World Builder API
-  version: 0.7.0
+  version: 0.8.0
   description: |
     S3-B #74 stub — hand-written coverage of existing Express routes.
     Not a full codegen client. No secrets.
@@ -42,6 +42,12 @@ paths:
         - in: query
           name: limit
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: before
+          schema: { type: string, format: date-time }
+          description: |
+            S3-H NIT-H-2 — ISO-8601 cursor; return only entries with `at` strictly older than this
+            value (newest-first within the page). Malformed → 400 VALIDATION {field:"before"}.
       responses:
         "200":
           description: |
@@ -50,7 +56,7 @@ paths:
             inbox.sweep {removed, kept}, webhook.refused {reason}, webhook.failed. Reads activity.jsonl, then the one
             rotated generation (activity.1.jsonl) when more are needed; malformed lines skipped.
         "400":
-          description: 'VALIDATION {field: "limit"} (not an integer 1..100)'
+          description: 'VALIDATION {field: "limit"|"before"} (limit not 1..100, or before not ISO-8601)'
   /api/featured:
     get:
       summary: Featured scene playlist (S3-F #140) - not rate-limited
@@ -157,6 +163,9 @@ paths:
   /api/assets/{id}:
     get:
       summary: Get asset by id
+      description: |
+        S3-H #69 - successful responses include a strong `ETag` header
+        (`"<sha256-canonical first 32 hex>"`).
       parameters:
         - in: path
           name: id
@@ -165,6 +174,10 @@ paths:
       responses:
         "200":
           description: Asset
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Strong ETag of the stored document
         "404":
           description: Not found
     patch:
@@ -176,11 +189,19 @@ paths:
         position/target; name 1-40; fov 10-120) validated; 17th camera or NaN -> 400.
         S3-D #88 - altText is trimmed; "" or null clears it; more than 280 characters ->
         400 ALT_TEXT_TOO_LONG {length, max}; a non-string -> 400 VALIDATION.
+        S3-H #69 - opt-in `If-Match`: absent behaves as before; mismatch -> 412
+        PRECONDITION_FAILED {current}; malformed -> 400 VALIDATION {field:"If-Match"}.
+        Order: 404 before 412 before body validation. Successful PATCH returns a new ETag.
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string }
+        - in: header
+          name: If-Match
+          required: false
+          schema: { type: string }
+          description: Opt-in precondition; quoted ETag or *
       requestBody:
         content:
           application/json:
@@ -191,6 +212,9 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "200":
           description: Updated
+          headers:
+            ETag:
+              schema: { type: string }
         "400":
           description: VALIDATION / PATCH_FORBIDDEN_FIELD / SCHEMA_VERSION_DECREMENT / ALT_TEXT_TOO_LONG
           content:
@@ -198,22 +222,34 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: Not found
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
     delete:
       summary: Delete asset metadata (S3-C tip3; data files untouched)
+      description: |
+        S3-H #69 - opt-in `If-Match` (same rules as PATCH). 404 before 412.
       parameters:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: If-Match
+          required: false
           schema: { type: string }
       responses:
         "429":
           $ref: "#/components/responses/RateLimited"
         "204":
           description: Deleted
+        "400":
+          description: VALIDATION {field:"If-Match"} when the header is malformed
         "404":
           description: Not found
         "409":
           description: ASSET_IN_USE {refs, deletedRefs} - still referenced by a scene (tombstoned nodes still block; deletedRefs = scenes referencing it only via deleted nodes)
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
   /api/assets/{id}/clip-ux:
     patch:
       summary: Patch clipUx only
@@ -221,10 +257,15 @@ paths:
         S3-C #1/#2 - blendMs (0-1000, default 250 in viewer) and timeScale
         (0.5-2.0, default 1.0). Out of range / non-finite -> 400. Never alters
         clipDurations (probe SoT).
+        S3-H #69 - opt-in If-Match; returns a new ETag on success.
       parameters:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: If-Match
+          required: false
           schema: { type: string }
       requestBody:
         content:
@@ -242,10 +283,15 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "200":
           description: Updated
+          headers:
+            ETag:
+              schema: { type: string }
         "400":
-          description: Invalid blendMs / timeScale / clipDurations write
+          description: Invalid blendMs / timeScale / clipDurations write / If-Match
         "404":
           description: Not found
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
   /api/assets/{id}/file:
     get:
       summary: Download GLB/FBX/OBJ
@@ -297,6 +343,20 @@ paths:
             application/yaml: {}
 components:
   responses:
+    PreconditionFailed:
+      description: |
+        S3-H #69 - If-Match did not match the current ETag. Nothing was written.
+        Body `{code:"PRECONDITION_FAILED", error, current}` where `current` is the
+        current strong ETag string.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - type: object
+                required: [current]
+                properties:
+                  current: { type: string, description: Current strong ETag }
     RateLimited:
       description: RATE_LIMITED (S3-E #139) — per-IP token bucket empty; wait Retry-After seconds
       headers:

@@ -23,6 +23,7 @@ import {
   effectiveBlendMs,
   parseSlugClash,
   recentImports,
+  recentRegisterIds,
   relativeTime,
   resolveReducedMotion,
   resolveTheme,
@@ -32,6 +33,8 @@ import {
   type MotionPref,
   type SlugClash,
   type ThemePref,
+  ACTIVITY_PAGE_LIMIT,
+  ACTIVITY_MAX_PAGES,
 } from "./s3dPrefs";
 import {
   parseRateLimited,
@@ -72,6 +75,23 @@ import {
   type ClipRequiresErr,
 } from "./s3fShare";
 import { drawQr } from "./s3fQr";
+import {
+  ETAG_PROMPT_BODY,
+  ETAG_PROMPT_TITLE,
+  SNAP_STEPS,
+  SPEED_STEPS,
+  cullActive,
+  cullDecisions,
+  effectiveTimeScale,
+  isPreconditionFailed,
+  parseSpeed,
+  saveHeaders,
+  snapDelta,
+  stepSpeed,
+  withSpeed,
+  type FrustumPlane,
+  type Sphere,
+} from "./s3hE2";
 // S3-G E2 — #36 undo/redo, #29 multi-select, #84 compare entry, #44 health nav
 import {
   batchApply,
@@ -189,6 +209,8 @@ type AssetMeta = {
   altText?: string;
   /** S3-D #94 */
   createdAt?: string;
+  /** S3-H NIT-H-1 — soft-tombstone; recent panel skips these */
+  deleted?: boolean;
   assetSchemaVersion?: number;
   scene?: {
     version?: number;
@@ -211,6 +233,9 @@ type AssetMeta = {
     cameras?: CameraBookmark[];
   };
 };
+
+/** S3-H CO-1 — hydrated recent row; registerAt is activity time when from /api/activity. */
+type RecentRow = AssetMeta & { registerAt?: string };
 
 const API = "";
 
@@ -374,6 +399,7 @@ function GltfPlayer({
   onDuration,
   blendMs = BLEND_MS_DEFAULT,
   timeScale = TIMESCALE_DEFAULT,
+  speed = 1,
   wireframe = false,
   bones = false,
   shadows = false,
@@ -389,6 +415,8 @@ function GltfPlayer({
   onDuration: (sec: number) => void;
   blendMs?: number;
   timeScale?: number;
+  /** S3-H #2 — session URL speed (?speed=), multiplied onto the persisted timeScale. */
+  speed?: number;
   wireframe?: boolean;
   bones?: boolean;
   shadows?: boolean;
@@ -402,8 +430,8 @@ function GltfPlayer({
 
   // S3-C #2 — timeScale on the active mixer only (clipDurations untouched).
   useEffect(() => {
-    if (mixer.current) mixer.current.timeScale = clampTimeScale(timeScale);
-  }, [timeScale, clone]);
+    if (mixer.current) mixer.current.timeScale = effectiveTimeScale(clampTimeScale(timeScale), speed);
+  }, [timeScale, speed, clone]);
 
   useEffect(() => {
     onError(null);
@@ -412,7 +440,7 @@ function GltfPlayer({
 
   useEffect(() => {
     mixer.current = new THREE.AnimationMixer(clone);
-    mixer.current.timeScale = clampTimeScale(timeScale);
+    mixer.current.timeScale = effectiveTimeScale(clampTimeScale(timeScale), speed);
     return () => {
       mixer.current?.stopAllAction();
       mixer.current = null;
@@ -637,7 +665,7 @@ function SceneNodeModel({
 
   return (
     <>
-      <group ref={setGroupObj} position={pos} rotation={rot} scale={scl}>
+      <group ref={setGroupObj} position={pos} rotation={rot} scale={scl} userData={{ gpNode: true, gpKeep: selected === true }}>
         <primitive object={clone} />
         {skeleton ? <primitive object={skeleton} /> : null}
         {highlighted ? (
@@ -698,7 +726,16 @@ function SceneNodeModel({
 
 
 /** S3-G #29 — one translate gizmo on the selection centroid; commits a shared delta on gesture end. */
-function MultiGizmo({ at, onCommit }: { at: [number, number, number]; onCommit: (d: [number, number, number]) => void }) {
+function MultiGizmo({
+  at,
+  onCommit,
+  snapStep,
+}: {
+  at: [number, number, number];
+  onCommit: (d: [number, number, number]) => void;
+  /** S3-H #30 — when set, the shared delta snaps to this step (relative offsets kept). */
+  snapStep?: number | null;
+}) {
   const [g, setG] = useState<THREE.Group | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tcRef = useRef<any>(null);
@@ -715,13 +752,67 @@ function MultiGizmo({ at, onCommit }: { at: [number, number, number]; onCommit: 
           object={g}
           mode="translate"
           onMouseUp={() => {
-            const d: [number, number, number] = [g.position.x - at[0], g.position.y - at[1], g.position.z - at[2]];
+            let d: [number, number, number] = [g.position.x - at[0], g.position.y - at[1], g.position.z - at[2]];
+            if (snapStep) {
+              d = snapDelta(d, snapStep);
+              g.position.set(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
+            }
             if (d.some((x) => Math.abs(x) > 1e-9)) onCommit(d);
           }}
         />
       ) : null}
     </>
   );
+}
+
+/**
+ * S3-H #130 — above SCENE_NODES_MAX/4 live nodes, hide scene nodes whose bounding sphere is outside
+ * the camera frustum. The selected node (gizmo target) is always drawn. Reports drawn/total.
+ */
+function CullController({
+  active,
+  onStats,
+}: {
+  active: boolean;
+  onStats: (s: { drawn: number; total: number }) => void;
+}) {
+  const frustum = useMemo(() => new THREE.Frustum(), []);
+  const m = useMemo(() => new THREE.Matrix4(), []);
+  const box = useMemo(() => new THREE.Box3(), []);
+  const sph = useMemo(() => new THREE.Sphere(), []);
+  const last = useRef("");
+  useFrame(({ scene, camera }) => {
+    const groups: THREE.Object3D[] = [];
+    scene.traverse((o) => {
+      if (o.userData?.gpNode) groups.push(o);
+    });
+    camera.updateMatrixWorld();
+    m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(m);
+    const planes: FrustumPlane[] = frustum.planes.map((p) => ({ nx: p.normal.x, ny: p.normal.y, nz: p.normal.z, c: p.constant }));
+    const spheres: Sphere[] = groups.map((g) => {
+      const wasVisible = g.visible;
+      g.visible = true;
+      box.setFromObject(g);
+      g.visible = wasVisible;
+      if (box.isEmpty()) {
+        g.getWorldPosition(sph.center);
+        sph.radius = 0.5;
+      } else box.getBoundingSphere(sph);
+      return { x: sph.center.x, y: sph.center.y, z: sph.center.z, r: sph.radius };
+    });
+    const show = cullDecisions(spheres, planes, active, groups.map((g) => g.userData.gpKeep === true));
+    groups.forEach((g, i) => {
+      g.visible = show[i];
+    });
+    const drawn = show.filter(Boolean).length;
+    const key = `${drawn}/${groups.length}`;
+    if (key !== last.current) {
+      last.current = key;
+      onStats({ drawn, total: groups.length });
+    }
+  });
+  return null;
 }
 
 function SceneNodeMissing({
@@ -737,7 +828,7 @@ function SceneNodeMissing({
 }) {
   const pos = transform?.position ?? ([0, 0, 0] as [number, number, number]);
   return (
-    <group position={pos}>
+    <group position={pos} userData={{ gpNode: true }}>
       <mesh>
         <boxGeometry args={[0.4, 0.4, 0.4]} />
         <meshStandardMaterial color="#a33" wireframe />
@@ -883,7 +974,7 @@ export function App() {
   // S3-D #127 — inline slug-clash state for the register form
   const [regClash, setRegClash] = useState<SlugClash | null>(null);
   // S3-D #94 — Recent imports (newest 20 by createdAt)
-  const [recent, setRecent] = useState<AssetMeta[]>([]);
+  const [recent, setRecent] = useState<RecentRow[]>([]);
   // S3-D #88 — alt text draft for the selected asset
   const [altDraft, setAltDraft] = useState("");
   const [altSaving, setAltSaving] = useState(false);
@@ -925,6 +1016,10 @@ export function App() {
   const cmpBtnRef = useRef<HTMLButtonElement | null>(null);
   const cmpPopRef = useRef<HTMLDivElement | null>(null);
   const cmpPos = useOverlayPlacement(cmpOpen, cmpBtnRef, cmpPopRef, cmpQuery);
+  // S3-H #32 — Cameras popover (NIT-F-1)
+  const [camOpen, setCamOpen] = useState(false);
+  const camBtnRef = useRef<HTMLButtonElement | null>(null);
+  const camPopRef = useRef<HTMLDivElement | null>(null);
   // S3-E #38/#41/#35 — cap (from /api/health limits), deleted-row toggle, purge confirm, replace
   const [sceneMaxNodes, setSceneMaxNodes] = useState(SCENE_MAX_NODES_DEFAULT);
   const [showDeleted, setShowDeleted] = useState(true);
@@ -990,6 +1085,31 @@ export function App() {
   );
   const [snapEnabled, setSnapEnabled] = useState(false);
   const [snapStep, setSnapStep] = useState(0.25);
+  // S3-H #2 — clip speed lives in the URL only (?speed=); invalid → 1
+  const [speed, setSpeed] = useState(() => parseSpeed(new URLSearchParams(window.location.search).get("speed")));
+  useEffect(() => {
+    const next = withSpeed(window.location.search, speed);
+    if (next !== window.location.search) {
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${next}${window.location.hash}`);
+    }
+  }, [speed]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== "[" && e.key !== "]") return;
+      const el = e.target as HTMLElement | null;
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      e.preventDefault();
+      setSpeed((s) => stepSpeed(s, e.key === "[" ? -1 : 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // S3-H #130 — drawn / total scene nodes (cull stats)
+  const [cullStats, setCullStats] = useState<{ drawn: number; total: number }>({ drawn: 0, total: 0 });
+  // S3-H #69 — strong ETag from the last load/save of the selected asset; 412 prompt
+  const etagRef = useRef<{ id: string; etag: string } | null>(null);
+  const [etagPrompt, setEtagPrompt] = useState(false);
   const [actionMapDraft, setActionMapDraft] = useState<Record<string, string>>(
     {},
   );
@@ -1011,22 +1131,72 @@ export function App() {
   const [viewDraft, setViewDraft] = useState<Required<SceneView>>(resolveSceneView(undefined));
   // S3-C #32 — orbit bookmarks draft
   const [camerasDraft, setCamerasDraft] = useState<CameraBookmark[]>([]);
+  const camPos = useOverlayPlacement(camOpen, camBtnRef, camPopRef, camerasDraft.length);
   const [cameraSel, setCameraSel] = useState<string>("");
   const [cameraErr, setCameraErr] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const controlsRef = useRef<any>(null);
   const clipUxTimer = useRef<number | null>(null);
 
-  // S3-D #94 — server-sorted history; falls back to client sort if the API predates sort/limit.
-  const refreshRecent = () =>
-    fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`)
-      .then(async (r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (Array.isArray(data)) setRecent(recentImports(data as AssetMeta[]));
-      })
-      .catch(() => {
+  // S3-H CO-1 + NIT-H-2 — page /api/activity?limit=100&before= until 20 live registers or
+  // end of log, capped at ACTIVITY_MAX_PAGES. NIT-H-1 skips deleted:true after hydrate.
+  // Fresh/empty first page falls back to S3-D #94 sort=-createdAt&limit=20.
+  const refreshRecent = () => {
+    void (async () => {
+      try {
+        const rows: RecentRow[] = [];
+        const seen = new Set<string>();
+        let before: string | undefined;
+        let page = 0;
+        let firstEmpty = false;
+        while (rows.length < RECENT_IMPORTS_LIMIT && page < ACTIVITY_MAX_PAGES) {
+          const q = new URLSearchParams({ limit: String(ACTIVITY_PAGE_LIMIT) });
+          if (before) q.set("before", before);
+          const r = await fetch(`${API}/api/activity?${q}`);
+          const act = r.ok ? await r.json() : null;
+          const items = Array.isArray(act?.items)
+            ? (act.items as { kind?: string; id?: string; at?: string }[])
+            : [];
+          if (page === 0 && items.length === 0) {
+            firstEmpty = true;
+            break;
+          }
+          if (items.length === 0) break;
+          const regs = recentRegisterIds(items, ACTIVITY_PAGE_LIMIT);
+          for (const { id, at } of regs) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            try {
+              const ar = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
+              if (!ar.ok) continue; // deleted / gone
+              const a = (await ar.json()) as AssetMeta;
+              if (a.deleted === true) continue; // NIT-H-1 — tombstoned must not show
+              rows.push({ ...a, registerAt: at });
+              if (rows.length >= RECENT_IMPORTS_LIMIT) break;
+            } catch {
+              /* skip unreachable */
+            }
+          }
+          const oldest = items[items.length - 1]?.at;
+          if (typeof oldest !== "string" || oldest === before) break;
+          before = oldest;
+          page += 1;
+          if (items.length < ACTIVITY_PAGE_LIMIT) break; // short page → end of log
+        }
+        if (firstEmpty) {
+          const fr = await fetch(`${API}/api/assets?sort=-createdAt&limit=${RECENT_IMPORTS_LIMIT}`);
+          const data = fr.ok ? await fr.json() : null;
+          if (Array.isArray(data)) {
+            setRecent(recentImports((data as AssetMeta[]).filter((a) => a.deleted !== true)));
+          }
+          return;
+        }
+        setRecent(rows);
+      } catch {
         /* panel is advisory; the main list reports API errors */
-      });
+      }
+    })();
+  };
 
   // S3-D #86/#90 — follow the OS settings live; the session selects override them.
   useEffect(() => {
@@ -1483,6 +1653,45 @@ export function App() {
   });
 
   const isScene = selected?.stage === "scene";
+  // S3-H #69 — remember the strong ETag of the loaded scene (opt-in If-Match on Save)
+  useEffect(() => {
+    if (!selected || selected.stage !== "scene") {
+      etagRef.current = null;
+      return;
+    }
+    const id = selected.id;
+    let gone = false;
+    fetch(`${API}/api/assets/${encodeURIComponent(id)}`)
+      .then((r) => {
+        const tag = r.ok ? r.headers.get("ETag") : null;
+        if (!gone && tag) etagRef.current = { id, etag: tag };
+      })
+      .catch(() => {
+        /* Save still works without If-Match */
+      });
+    return () => {
+      gone = true;
+    };
+  }, [selected?.id, selected?.stage, selected?.scene]);
+  const reloadAfterConflict = async () => {
+    if (!selected) return;
+    const id = selected.id;
+    try {
+      const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const tag = r.headers.get("ETag");
+      const fresh = (await r.json()) as AssetMeta;
+      if (tag) etagRef.current = { id, etag: tag };
+      // replaces the draft and clears undo/redo (S3-G dev-5): force the "different scene" path
+      histFor.current = null;
+      setAssets((list) => list.map((a) => (a.id === id ? { ...a, ...fresh } : a)));
+      setSelected((cur) => (cur && cur.id === id ? { ...fresh } : cur));
+      setSceneSaveError(null);
+      setEtagPrompt(false);
+    } catch (err) {
+      setSceneSaveError(`Reload failed: ${err}`);
+    }
+  };
   // S3-E #41 — tombstoned nodes are never rendered / preflighted / gizmo-selectable.
   const sceneNodes = liveNodes(isScene && sceneDraft.length > 0 ? sceneDraft : selected?.scene?.nodes ?? []);
   const liveCount = liveNodes(sceneDraft).length;
@@ -1878,13 +2087,19 @@ export function App() {
         },
       };
       // PATCH only (#23 R1 nit): 4xx must surface — never silent POST fallback.
+      const known = etagRef.current?.id === selected.id ? etagRef.current.etag : null;
       const r = await fetch(`${API}/api/assets/${selected.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: saveHeaders(known),
         body: JSON.stringify({ scene: body.scene }),
       });
       const textBody = await r.text();
       if (noteRateLimit(r, textBody, "scene")) return;
+      // S3-H #69 — someone else saved: no auto-merge; Reload (clears undo) or Cancel
+      if (isPreconditionFailed(r.status, textBody)) {
+        setEtagPrompt(true);
+        return;
+      }
       if (!r.ok) {
         try {
           const j = JSON.parse(textBody) as { code?: string; max?: number };
@@ -1894,6 +2109,8 @@ export function App() {
         }
         throw new Error(`${r.status} ${textBody}`);
       }
+      const newTag = r.headers.get("ETag");
+      if (newTag) etagRef.current = { id: selected.id, etag: newTag };
       setReplaceUndo(null);
       // S3-G #36 — Save keeps the stack; the marker sits on the step that was saved
       setHist((h) => ({ ...h, marker: Math.min(savedIdx, h.steps.length) }));
@@ -2169,8 +2386,8 @@ export function App() {
                           ⚠ {n}
                         </span>
                       ) : null}
-                      <span className="muted recent-time" title={a.createdAt ?? "no createdAt (legacy)"}>
-                        {relativeTime(a.createdAt)}
+                      <span className="muted recent-time" title={a.registerAt ?? a.createdAt ?? "no createdAt (legacy)"}>
+                        {relativeTime(a.registerAt ?? a.createdAt)}
                       </span>
                     </button>
                   </li>
@@ -2442,6 +2659,29 @@ export function App() {
           </div>
         </div>
         <div className="viewer-stage">
+        {etagPrompt && (
+          <div className="etag-backdrop" role="presentation">
+            <div
+              className="etag-modal"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="etag-title"
+              aria-describedby="etag-body"
+              data-testid="etag-reload-prompt"
+            >
+              <h2 id="etag-title">{ETAG_PROMPT_TITLE}</h2>
+              <p id="etag-body">{ETAG_PROMPT_BODY}</p>
+              <div className="etag-actions">
+                <button type="button" className="primary" data-testid="etag-reload" onClick={() => void reloadAfterConflict()}>
+                  Reload
+                </button>
+                <button type="button" data-testid="etag-cancel" onClick={() => setEtagPrompt(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {statsOpen && (
           <div className="stats-panel" aria-label="Viewer stats">
             <div className="import-meta-title">Stats</div>
@@ -2467,6 +2707,15 @@ export function App() {
               <span className="muted">characterType</span>
               <strong>{selected?.characterType ?? "—"}</strong>
             </div>
+            {isScene && (
+              <div className="import-meta-row">
+                <span className="muted">drawn / total</span>
+                <strong>
+                  <span data-testid="stats-drawn">{cullStats.drawn}</span> /{" "}
+                  <span data-testid="stats-total">{cullStats.total}</span>
+                </strong>
+              </div>
+            )}
           </div>
         )}
         <ErrorBoundary
@@ -2592,7 +2841,8 @@ export function App() {
             enableDamping={!reducedMotion}
             touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }}
           />
-          {isScene && multiCentroid ? <MultiGizmo at={multiCentroid} onCommit={moveSelection} /> : null}
+          {isScene ? <CullController active={cullActive(liveCount, sceneMaxNodes)} onStats={setCullStats} /> : null}
+          {isScene && multiCentroid ? <MultiGizmo at={multiCentroid} onCommit={moveSelection} snapStep={snapEnabled ? snapStep : null} /> : null}
           <Suspense fallback={null}>
             {isScene
               ? sceneNodes.map((n) => {
@@ -2664,6 +2914,7 @@ export function App() {
                     onDuration={setDuration}
                     blendMs={effectiveBlendMs(blendMs, reducedMotion)}
                     timeScale={timeScale}
+                    speed={speed}
                     wireframe={wireframe}
                     bones={showBones && bonesAvailable}
                     shadows={viewDraft.shadows}
@@ -2992,68 +3243,86 @@ export function App() {
               <label className="tiny" style={{ display: "inline-flex", gap: 4 }}>
                 <input
                   type="checkbox"
+                  data-testid="snap-toggle"
                   checked={snapEnabled}
                   onChange={(e) => setSnapEnabled(e.target.checked)}
                 />
                 snap
               </label>
-              <input
-                type="number"
-                step="0.05"
-                min="0.05"
-                value={snapStep}
-                aria-label="snap step"
-                style={{ width: "4rem" }}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setSnapStep(Number.isFinite(v) && v > 0 ? v : 0.25);
-                }}
-              />
-            </div>
-            <div className="scene-author-actions" aria-label="Orbit bookmarks">
-              <span className="muted">
-                Cameras ({camerasDraft.length}/{CAMERAS_MAX})
-              </span>
               <select
-                value={cameraSel}
-                aria-label="Camera bookmark"
-                onChange={(e) => e.target.value && jumpToCamera(e.target.value)}
+                data-testid="snap-step"
+                value={String(snapStep)}
+                aria-label="snap step"
+                onChange={(e) => setSnapStep(Number(e.target.value))}
               >
-                <option value="">— select view —</option>
-                {camerasDraft.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
+                {SNAP_STEPS.map((s) => (
+                  <option key={s} value={String(s)}>
+                    {s}
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="scene-author-actions" aria-label="Orbit bookmarks">
+              {/* S3-H #32 (Leader: reuse scene.cameras, cap 16) — Cameras popover, NIT-F-1 placement */}
               <button
                 type="button"
                 className="tiny"
-                disabled={camerasDraft.length >= CAMERAS_MAX}
-                onClick={saveCameraView}
+                ref={camBtnRef}
+                data-testid="camera-bookmarks"
+                aria-haspopup="dialog"
+                aria-expanded={camOpen}
+                onClick={() => setCamOpen((o) => !o)}
               >
-                + Save view
+                Cameras ({camerasDraft.length}/{CAMERAS_MAX})
               </button>
-              <button
-                type="button"
-                className="tiny"
-                disabled={!cameraSel}
-                onClick={() => {
-                  const cur = camerasDraft.find((c) => c.id === cameraSel);
-                  const name = window.prompt("Rename view", cur?.name ?? "");
-                  if (name !== null && cameraSel) renameCamera(cameraSel, name);
-                }}
-              >
-                Rename
-              </button>
-              <button
-                type="button"
-                className="tiny"
-                disabled={!cameraSel}
-                onClick={() => cameraSel && deleteCamera(cameraSel)}
-              >
-                Delete
-              </button>
+              {camOpen && (
+                <div className="share-pop camera-pop" ref={camPopRef} style={camPos} role="dialog" aria-label="Saved cameras">
+                  {camerasDraft.length === 0 ? (
+                    <p className="muted" data-testid="camera-bookmark-empty">No saved cameras yet</p>
+                  ) : (
+                    <ul className="camera-list">
+                      {camerasDraft.map((c) => (
+                        <li key={c.id} data-testid="camera-bookmark-item" className={cameraSel === c.id ? "active" : undefined}>
+                          <span className="camera-name">{c.name}</span>
+                          <button type="button" className="tiny" data-testid="camera-bookmark-restore" onClick={() => jumpToCamera(c.id)}>
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            className="tiny"
+                            data-testid="camera-bookmark-rename"
+                            onClick={() => {
+                              const name = window.prompt("Rename view", c.name);
+                              if (name !== null) renameCamera(c.id, name);
+                            }}
+                          >
+                            Rename
+                          </button>
+                          <button type="button" className="tiny" data-testid="camera-bookmark-delete" onClick={() => deleteCamera(c.id)}>
+                            Delete
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="camera-foot">
+                    <button
+                      type="button"
+                      className="tiny"
+                      data-testid="camera-bookmark-save"
+                      disabled={camerasDraft.length >= CAMERAS_MAX}
+                      onClick={saveCameraView}
+                    >
+                      Save current view
+                    </button>
+                    {camerasDraft.length >= CAMERAS_MAX && (
+                      <span className="muted" data-testid="camera-bookmark-cap">
+                        {CAMERAS_MAX} of {CAMERAS_MAX} cameras
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
@@ -3543,6 +3812,38 @@ export function App() {
               Reset
             </button>
           </label>
+          <span className="speed" role="group" aria-label="Clip speed (URL)">
+            <button
+              type="button"
+              className="tiny"
+              data-testid="clip-speed-down"
+              aria-label="Slower ([)"
+              onClick={() => setSpeed((s) => stepSpeed(s, -1))}
+            >
+              [
+            </button>
+            <select
+              data-testid="clip-speed"
+              aria-label="Clip speed"
+              value={String(speed)}
+              onChange={(e) => setSpeed(parseSpeed(e.target.value))}
+            >
+              {SPEED_STEPS.map((s) => (
+                <option key={s} value={String(s)}>
+                  {s}×
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="tiny"
+              data-testid="clip-speed-up"
+              aria-label="Faster (])"
+              onClick={() => setSpeed((s) => stepSpeed(s, 1))}
+            >
+              ]
+            </button>
+          </span>
           {canPlay && clip && selected?.clipDurations?.[clip] !== undefined ? (
             <span className="muted" title="Effective length = raw clipDurations / speed">
               effective {effectiveDurationMs(selected.clipDurations[clip], timeScale)} ms

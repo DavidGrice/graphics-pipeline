@@ -73,11 +73,21 @@ fi
 
 mkdir -p "$(dirname "${OUT_GLB}")"
 
-# S3-E #66 — integer wall-clock ms (GNU date %3N; second resolution where unsupported).
+# S3-E #66 — integer wall-clock ms. Prefer bash 5 EPOCHREALTIME (Linux CI); then GNU
+# date %s%3N only when it returns a 13+ digit ms stamp (a bare %s is 10 digits today and
+# must not be mixed with ms). Fall back to whole-second * 1000. Clamp a backward clock to 0
+# so the sidecar never writes a negative stages.export (PR #53 Node 22 flake).
 now_ms() {
+  if [[ -n "${EPOCHREALTIME-}" ]]; then
+    local s f
+    s="${EPOCHREALTIME%.*}"
+    f="${EPOCHREALTIME#*.}000"
+    echo $(( 10#${s} * 1000 + 10#${f:0:3} ))
+    return
+  fi
   local t
   t="$(date +%s%3N 2>/dev/null || true)"
-  if [[ "${t}" =~ ^[0-9]+$ ]]; then echo "${t}"; else echo $(( $(date +%s) * 1000 )); fi
+  if [[ "${t}" =~ ^[0-9]{13,}$ ]]; then echo "${t}"; else echo $(( $(date +%s) * 1000 )); fi
 }
 EXPORT_T0="$(now_ms)"
 
@@ -103,6 +113,7 @@ if [[ -f "${OUT_GLB}" ]]; then
   # register_asset.mjs uses the export ms only when BOTH the GLB name and sha256 match, so two
   # GLBs in one folder never share an export time. Never part of goldens (GLB-only hashes).
   EXPORT_MS=$(( $(now_ms) - EXPORT_T0 ))
+  if (( EXPORT_MS < 0 )); then EXPORT_MS=0; fi
   GLB_NAME="$(basename "${OUT_GLB}")"
   GLB_SHA=""
   if command -v sha256sum >/dev/null 2>&1; then

@@ -81,13 +81,13 @@ export function corsAllowlist(origins) {
     const ok = allow.has(String(origin).toLowerCase());
     if (ok) {
       res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Expose-Headers", "Retry-After, X-Store");
+      res.setHeader("Access-Control-Expose-Headers", "Retry-After, X-Store, ETag");
     }
     if (isPreflight) {
       if (!ok) return sendError(res, 403, CORS_ORIGIN_DENIED, "origin is not in CORS_ORIGINS");
       res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,POST,PATCH,DELETE,OPTIONS");
       const reqHeaders = req.headers["access-control-request-headers"];
-      res.setHeader("Access-Control-Allow-Headers", reqHeaders ? String(reqHeaders) : "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", reqHeaders ? String(reqHeaders) : "Content-Type, If-Match");
       res.setHeader("Access-Control-Max-Age", "600");
       return res.status(204).end();
     }

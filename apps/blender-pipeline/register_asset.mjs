@@ -14,7 +14,8 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { assertSingleArmature, IDLE_TPOSE_SUSPECT, GLB_CORRUPT } from "./probe_glb.mjs";
-import { cachedProbe, probeCacheEnabled } from "./probe_cache.mjs";
+import { cachedProbeAsync, probeCacheEnabled } from "./probe_cache.mjs";
+import { parseProbeWorkers, parseProbeTimeoutMs, INTERNAL, resetSharedProbePoolForTests } from "./probe_pool.mjs";
 import { buildTimings, readExportMs, writeTimings } from "./timings.mjs";
 import { premultWarningForPng } from "./png_alpha.mjs";
 import { parseMaxGlbMb, maxGlbBytes, clipRequiresProblem, ClipRequiresSchema } from "@graphics-pipeline/asset-schema";
@@ -133,6 +134,8 @@ if (importMetaPath) {
 // S3-E tip1.1 — PROBE_CACHE is strict (0|1, unset = 1); anything else → CONFIG_INVALID, exit 2.
 try {
   probeCacheEnabled();
+  parseProbeWorkers(process.env.PROBE_WORKERS);
+  parseProbeTimeoutMs(process.env.PROBE_TIMEOUT_MS);
 } catch (err) {
   console.error(`ERROR ${err.message}`);
   process.exit(2);
@@ -160,8 +163,12 @@ let probeCache;
 let glbSha;
 const tProbe0 = performance.now();
 try {
-  ({ probed, probeCache, sha256: glbSha } = cachedProbe(glbAbs, { dataRoot: DATA_DIR }));
+  ({ probed, probeCache, sha256: glbSha } = await cachedProbeAsync(glbAbs, { dataRoot: DATA_DIR }));
 } catch (err) {
+  if (err?.code === INTERNAL) {
+    console.error(`ERROR ${INTERNAL}: probe timed out — not registered`);
+    process.exit(1);
+  }
   const reason = err?.code === GLB_CORRUPT ? err.reason : "unreadable GLB";
   console.error(`ERROR ${GLB_CORRUPT}: ${path.basename(glbAbs)}: ${reason} — not registered`);
   process.exit(5);
@@ -439,3 +446,6 @@ console.log(`timings: total=${timings.totalMs}ms probe=${timings.stages.probe}ms
 console.log(
   `OK registered ${id} stage=${stage} characterType=${characterType} clips=${probed.clips.join(",")} → ${glbDest}`,
 );
+// S3-H #133 — close worker pool so the CLI exits (spawnSync callers must not hang).
+await resetSharedProbePoolForTests();
+process.exit(0);

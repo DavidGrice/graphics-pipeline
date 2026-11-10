@@ -244,6 +244,44 @@ export function diffRows(a: CompareAsset, b: CompareAsset, stats: { a?: { tris?:
   return rows.map(([key, label, va, vb]) => ({ key, label, a: va, b: vb, differs: va !== vb }));
 }
 
+// ---------------------------------------------------------------- S3-H #117 probe diff
+/**
+ * "What changed" from A → B (R1 §13, D1 §11): tris, bones, clips added/removed, clipRequires,
+ * size, characterType. Client-only over the same inputs as diffRows. [] = "No differences".
+ */
+export function probeDiff(
+  a: CompareAsset,
+  b: CompareAsset,
+  stats: { a?: { tris?: number; bones?: number }; b?: { tris?: number; bones?: number } } = {},
+): string[] {
+  const out: string[] = [];
+  const rows = new Map(diffRows(a, b, stats).map((r) => [r.key, r]));
+  const num = (k: string, label: string) => {
+    const r = rows.get(k)!;
+    if (r.differs) out.push(`${label}: ${r.a} → ${r.b}`);
+  };
+  num("tris", "Tris");
+  num("bones", "Bones");
+  const ca = new Set(a.clips ?? []);
+  const cb = new Set(b.clips ?? []);
+  const added = [...cb].filter((c) => !ca.has(c)).sort();
+  const removed = [...ca].filter((c) => !cb.has(c)).sort();
+  if (added.length) out.push(`Clips added: ${added.join(", ")}`);
+  if (removed.length) out.push(`Clips removed: ${removed.join(", ")}`);
+  const ra = a.clipRequires ?? {};
+  const rb = b.clipRequires ?? {};
+  const norm = (v?: string[]) => (v ? [...v].sort().join("+") : "");
+  for (const k of [...new Set([...Object.keys(ra), ...Object.keys(rb)])].sort()) {
+    const va = norm(ra[k]);
+    const vb = norm(rb[k]);
+    if (va === vb) continue;
+    out.push(!va ? `clipRequires added: ${k}: ${vb}` : !vb ? `clipRequires removed: ${k}` : `clipRequires ${k}: ${va} → ${vb}`);
+  }
+  num("size", "Size");
+  num("characterType", "characterType");
+  return out;
+}
+
 // ---------------------------------------------------------------- #44 health page
 export const HEALTH_POLL_MS = 10_000;
 export type HealthJson = {
