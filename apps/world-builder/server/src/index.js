@@ -4,6 +4,7 @@
  */
 import express from "express";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
@@ -22,6 +23,9 @@ import { parseInboxTtlHours, sweepInbox, referencedInboxNames, INBOX_SWEEP_INTER
 import { parseWebhookConfig, createWebhook } from "./webhook.js";
 import { createActivityLog, parseActivityLimit, parseActivityBefore, parseActivityMaxLines } from "./activity.js";
 import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
+import { parseBulkMax, readZipEntries, readZipEntry, entryEscapes, slugFromEntryName, ZipFormatError } from "./bulk.js";
+import { cachedProbeAsync } from "../../../blender-pipeline/probe_cache.mjs";
+import { assertSingleArmature } from "../../../blender-pipeline/probe_glb.mjs";
 import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
 
 /**
@@ -140,6 +144,7 @@ let ACTIVITY_MAX_LINES;
 let BRIDGE_MODE;
 let PUBLIC_BASE_URL;
 let INBOX_TTL_HOURS;
+let BULK_MAX;
 let WEBHOOK_CONFIG;
 try {
   try {
@@ -159,6 +164,8 @@ try {
   PUBLIC_BASE_URL = parsePublicBaseUrl(process.env.PUBLIC_BASE_URL);
   // S3-G #78 — inbox PNG TTL hours (1..8760, default 168)
   INBOX_TTL_HOURS = parseInboxTtlHours(process.env.INBOX_TTL_HOURS);
+  // S3-I #70 — .glb entries per bulk zip (1..100, default 20)
+  BULK_MAX = parseBulkMax(process.env.BULK_MAX);
   // S3-G #72 — webhook (off unless WEBHOOK_URL); bad values name the variable only
   WEBHOOK_CONFIG = parseWebhookConfig(process.env);
 } catch (err) {
@@ -704,6 +711,146 @@ app.post("/api/assets", async (req, res) => {
 });
 
 
+
+
+/**
+ * S3-I #70 — POST /api/assets/bulk {zip:"inbox/<file>.zip"}. Whole-request failures (nothing written):
+ * 400 VALIDATION {field:"zip"|"entries"}, 400 PATH_OUTSIDE_INBOX (path or zip-slip entry), 413 GLB_TOO_LARGE
+ * (zip > BULK_MAX * MAX_GLB_BYTES). Per entry (200, results[] in zip order): SLUG_CLASH, GLB_TOO_LARGE,
+ * GLB_CORRUPT, MULTI_ARMATURE, VALIDATION, INTERNAL. Successes record asset.register (not pack.import).
+ */
+app.post("/api/assets/bulk", async (req, res) => {
+  try {
+    const zipRel = req.body?.zip;
+    if (typeof zipRel !== "string" || zipRel === "" || !/\.zip$/i.test(zipRel)) {
+      return sendError(res, 400, "VALIDATION", 'zip must be a string like "inbox/<file>.zip"', { field: "zip" });
+    }
+    let zipAbs;
+    try {
+      const s = zipRel.replace(/\\/g, "/").replace(/^data\//, "");
+      if (!s.startsWith("inbox/")) throw new PathGuardError(PATH_OUTSIDE_INBOX, "zip must be under inbox/");
+      zipAbs = resolveUnder(INBOX_ROOT, s.slice("inbox/".length), { code: PATH_OUTSIDE_INBOX });
+    } catch (err) {
+      if (err instanceof PathGuardError) return sendError(res, 400, PATH_OUTSIDE_INBOX, `zip: path rejected (${err.reason})`, { field: "zip" });
+      throw err;
+    }
+    let st;
+    try {
+      st = fs.statSync(zipAbs);
+    } catch {
+      st = null;
+    }
+    if (!st || !st.isFile()) return sendError(res, 400, "VALIDATION", "zip not found under inbox/", { field: "zip" });
+    const zipCap = BULK_MAX * MAX_GLB_BYTES;
+    if (st.size > zipCap) {
+      return sendError(res, 413, "GLB_TOO_LARGE", `zip is ${st.size} bytes; max is ${zipCap} (BULK_MAX * MAX_GLB_MB)`, { sizeBytes: st.size, maxBytes: zipCap });
+    }
+    const zbuf = fs.readFileSync(zipAbs);
+    let entries;
+    try {
+      entries = readZipEntries(zbuf);
+    } catch (err) {
+      if (err instanceof ZipFormatError) return sendError(res, 400, "VALIDATION", "zip is not a readable archive", { field: "zip" });
+      throw err;
+    }
+    if (entries.some((e) => entryEscapes(e.name))) {
+      return sendError(res, 400, PATH_OUTSIDE_INBOX, "zip entry path rejected (outside the extract root)", { field: "zip" });
+    }
+    const glbs = entries.filter((e) => !e.dir && /\.glb$/i.test(e.name));
+    if (glbs.length === 0 || glbs.length > BULK_MAX) {
+      return sendError(res, 400, "VALIDATION", `zip must hold 1..${BULK_MAX} .glb entries (found ${glbs.length})`, { field: "entries" });
+    }
+
+    const col = collection();
+    const takenSlugs = async () =>
+      new Set(
+        col
+          ? (await col.find({}, { projection: { slug: 1 } }).toArray()).map((d) => d.slug)
+          : [...memoryAssets.values()].map((d) => d.slug),
+      );
+    const results = [];
+    for (const e of glbs) {
+      const name = e.name.length > 200 ? `${e.name.slice(0, 199)}…` : e.name;
+      const fail = (code, extra = {}) => results.push({ name, ok: false, ...extra, code });
+      const slug = slugFromEntryName(e.name);
+      if (!slug) {
+        fail("VALIDATION");
+        continue;
+      }
+      const taken = await takenSlugs();
+      if (taken.has(slug)) {
+        fail("SLUG_CLASH", { slug });
+        continue;
+      }
+      const got = readZipEntry(zbuf, e, MAX_GLB_BYTES);
+      if (got.tooLarge) {
+        fail("GLB_TOO_LARGE", { slug });
+        continue;
+      }
+      if (!got.data) {
+        fail("GLB_CORRUPT", { slug });
+        continue;
+      }
+      const id = randomUUID();
+      const dir = path.join(ASSETS_DIR, id);
+      const glbAbs = path.join(dir, "model.glb");
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(glbAbs, got.data);
+        let probed;
+        try {
+          ({ probed } = await cachedProbeAsync(glbAbs, { dataRoot: DATA_ROOT }));
+          assertSingleArmature(probed);
+        } catch (err) {
+          fs.rmSync(dir, { recursive: true, force: true });
+          fail(err?.code === "MULTI_ARMATURE" ? "MULTI_ARMATURE" : err?.code === "INTERNAL" ? "INTERNAL" : "GLB_CORRUPT", { slug });
+          continue;
+        }
+        const rigged =
+          probed.hasArmature && probed.hasWeights && ["idle", "walk", "run"].every((c) => probed.clips.includes(c));
+        const now = new Date().toISOString();
+        const doc = {
+          id,
+          slug,
+          name: slug,
+          characterType: rigged ? "prop" : "billboard",
+          stage: rigged ? "rigged" : "mvp-billboard",
+          tags: ["bulk"],
+          clips: probed.clips,
+          clipDurations: probed.clipDurations,
+          license: "MIT",
+          formats: { glb: `assets/${id}/model.glb`, preview: `assets/${id}/model.glb` },
+          rig: {
+            hasArmature: probed.hasArmature,
+            hasWeights: probed.hasWeights,
+            boneCount: probed.boneCount,
+            armatureCount: probed.armatureCount,
+          },
+          assetSchemaVersion: ASSET_SCHEMA_VERSION,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const parsed = safeParseAsset(doc);
+        if (!parsed.success) {
+          fs.rmSync(dir, { recursive: true, force: true });
+          fail("VALIDATION", { slug });
+          continue;
+        }
+        if (col) await col.updateOne({ id }, { $set: doc }, { upsert: true });
+        else memoryAssets.set(id, doc);
+        void activity.record("asset.register", doc);
+        setImmediate(() => void webhook.emit("asset.register", doc));
+        results.push({ name, ok: true, id, slug });
+      } catch {
+        fs.rmSync(dir, { recursive: true, force: true });
+        fail("INTERNAL", { slug });
+      }
+    }
+    res.status(200).json({ results });
+  } catch (err) {
+    sendInternal(req, res, err);
+  }
+});
 
 app.patch("/api/assets/:id", async (req, res) => {
   try {

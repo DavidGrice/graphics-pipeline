@@ -37,6 +37,8 @@ export const NON_CODES = new Set([
   "WEBHOOK_ALLOW_PRIVATE",
   "WEBHOOK_SECRET",
   "WEBHOOK_URL",
+  // S3-I #70 env var (named by CONFIG_INVALID), not an error code
+  "BULK_MAX",
   // S3-H #133 env vars (named by CONFIG_INVALID), not error codes
   "PROBE_WORKERS",
   "PROBE_TIMEOUT_MS",
