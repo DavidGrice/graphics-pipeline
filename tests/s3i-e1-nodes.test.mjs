@@ -118,13 +118,14 @@ test("#40 records scene.save in the activity log", async () => {
   assert.match(JSON.stringify(top), /scene\.save/);
 });
 
-test("#40 body validation: empty → field upsert; overlap → field remove; non-array; bad node id", async () => {
+test("#40 body validation: empty / duplicate upsert id → field upsert; overlap → field remove {ids}; non-array; bad node id", async () => {
   const id = await makeScene("body", [node(0), node(1)]);
   const e = await etag(id);
   const cases = [
     [{}, "upsert"],
     [{ upsert: [], remove: [] }, "upsert"],
     [{ upsert: [node(1)], remove: ["n1"] }, "remove"],
+    [{ upsert: [node(1), node(1, { name: "dup" })] }, "upsert"], // duplicate upsert id
     [{ upsert: "n1" }, "upsert"],
     [{ remove: "n1" }, "remove"],
     [{ upsert: [{ assetId: child }] }, "upsert[0].id"],
@@ -138,6 +139,9 @@ test("#40 body validation: empty → field upsert; overlap → field remove; non
     assert.equal(j.field, field, JSON.stringify(body));
   }
   assert.equal(await etag(id), e, "nothing written");
+  // the overlap 400 names the overlapping ids
+  const ov = await (await nodesPatch(id, { upsert: [node(0), node(1)], remove: ["n1", "n0"] }, { "If-Match": e })).json();
+  assert.deepEqual(ov.ids, ["n1", "n0"]);
 });
 
 test("#40 not a scene → 400 VALIDATION {field:\"stage\"}", async () => {
