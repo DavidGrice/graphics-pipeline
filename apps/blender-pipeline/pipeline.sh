@@ -17,13 +17,16 @@ SEED="${SEED:-0}"
 # S3-F #110 — optional `--gltf-separate` (any position): also write a debug .gltf + .bin (+ textures)
 # into <out dir>/<name>.gltf-debug/ AFTER the canonical GLB. The GLB bytes, timings sidecar, register,
 # probe, pack and goldens never see the debug dir (gitignored: *.gltf-debug/).
+# S3-I #59 — optional `--draco` (any position, off by default): Draco-compress mesh primitives.
 GLTF_SEPARATE=0
+DRACO=0
 POSITIONAL=()
 for arg in "$@"; do
   case "${arg}" in
     --gltf-separate) GLTF_SEPARATE=1 ;;
+    --draco) DRACO=1 ;;
     --*)
-      echo "ERROR: unknown option ${arg} (only --gltf-separate)" >&2
+      echo "ERROR: unknown option ${arg} (only --gltf-separate, --draco)" >&2
       exit 1
       ;;
     *) POSITIONAL+=("${arg}") ;;
@@ -31,7 +34,7 @@ for arg in "$@"; do
 done
 
 if [[ ${#POSITIONAL[@]} -lt 2 ]]; then
-  echo "Usage: BLENDER_BIN=/path/to/blender [MODE=billboard|rigged] $0 [--gltf-separate] <in.png> <out.glb>" >&2
+  echo "Usage: BLENDER_BIN=/path/to/blender [MODE=billboard|rigged] $0 [--gltf-separate] [--draco] <in.png> <out.glb>" >&2
   exit 1
 fi
 
@@ -100,6 +103,7 @@ if [[ "${GLTF_SEPARATE}" == "1" ]]; then
   if [[ "${DEBUG_DIR}" == *.gltf-debug && -d "${DEBUG_DIR}" ]]; then rm -rf -- "${DEBUG_DIR}"; fi
   DEBUG_ARGS=(--gltf-separate "${DEBUG_DIR}")
 fi
+if [[ "${DRACO}" == "1" ]]; then DEBUG_ARGS+=(--draco); fi
 "${BLENDER_BIN}" --background --python "${PNG_TO_GLB}" -- "${IN_PNG}" "${OUT_GLB}" --mode "${MODE}" --seed "$((10#${SEED}))" ${DEBUG_ARGS[@]+"${DEBUG_ARGS[@]}"}
 
 if [[ -f "${OUT_GLB}" ]]; then
