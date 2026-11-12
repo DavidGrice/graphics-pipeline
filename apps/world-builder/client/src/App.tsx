@@ -4,8 +4,9 @@
  */
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
+import { DRACO_PATH } from "./s3iDraco";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent } from "react";
+import type { CSSProperties, PointerEvent, ReactNode } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
 import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
@@ -83,6 +84,7 @@ import {
   cullActive,
   cullDecisions,
   effectiveTimeScale,
+  sphereInFrustum,
   isPreconditionFailed,
   parseSpeed,
   saveHeaders,
@@ -119,6 +121,24 @@ import {
   type History,
 } from "./s3gAuthor";
 import { navigate, NavLink, useOverlayPlacement } from "./s3gViews";
+import { SCENE_TEMPLATES, missingSlots, slotCandidates, templateSceneBody, type Picks } from "./s3iTemplates";
+import {
+  THUMB_SIZE,
+  canAddMarker,
+  cleanMarkers,
+  hasPngPreview,
+  isLazyIndex,
+  loadedText,
+  markerHint,
+  markerPct,
+  markersForClip,
+  markerTime,
+  nextMarkerName,
+  renameProblem,
+  sceneInitial,
+  squareCrop,
+  type Marker,
+} from "./s3iE2";
 import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
@@ -154,6 +174,8 @@ type ClipUx = {
   blendMs?: number;
   /** S3-C #2 mixer timeScale (0.5–2.0). */
   timeScale?: number;
+  /** S3-I #81 timeline markers (asset-level, server-validated; never from localStorage). */
+  markers?: Marker[];
 };
 
 type SceneNodeDraft = {
@@ -307,7 +329,36 @@ function mergeClipUx(asset: AssetMeta | null): ClipUx {
     disabled: remote.disabled ?? local.disabled,
     blendMs: remote.blendMs ?? local.blendMs,
     timeScale: remote.timeScale ?? local.timeScale,
+    markers: cleanMarkers(remote.markers),
   };
+}
+
+/**
+ * S3-I #28 — scene list card image. Only a stored .png preview is requested; a missing file (404) or
+ * any load error shows the scene initial on a neutral tile. Decorative: the button keeps its name.
+ */
+function SceneThumb({ asset, v }: { asset: AssetMeta; v: number | undefined }) {
+  const [failed, setFailed] = useState(false);
+  const png = hasPngPreview(asset.formats?.preview);
+  useEffect(() => setFailed(false), [asset.id, v, png]);
+  if (!png || failed) {
+    return (
+      <span className="scene-thumb fallback" data-testid="scene-thumb-fallback" aria-hidden="true">
+        {sceneInitial(asset.name, asset.slug)}
+      </span>
+    );
+  }
+  return (
+    <img
+      className="scene-thumb"
+      data-testid="scene-thumb"
+      alt=""
+      width={32}
+      height={32}
+      src={`${API}/api/assets/${encodeURIComponent(asset.id)}/preview${v ? `?v=${v}` : ""}`}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 /**
@@ -421,7 +472,7 @@ function GltfPlayer({
   bones?: boolean;
   shadows?: boolean;
 }) {
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(url, DRACO_PATH);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const prevClipRef = useRef<string | null>(null);
@@ -593,9 +644,12 @@ function SceneNodeModel({
   wireframe = false,
   bones = false,
   shadows = false,
+  onLoaded,
 }: {
   url: string;
   clipName?: string;
+  /** S3-I #131 — called once the GLB has resolved and the model has mounted. */
+  onLoaded?: () => void;
   transform?: {
     position?: [number, number, number];
     rotation?: [number, number, number];
@@ -616,7 +670,12 @@ function SceneNodeModel({
   bones?: boolean;
   shadows?: boolean;
 }) {
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(url, DRACO_PATH);
+  const onLoadedRef = useRef(onLoaded);
+  onLoadedRef.current = onLoaded;
+  useEffect(() => {
+    onLoadedRef.current?.();
+  }, [url]);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const [groupObj, setGroupObj] = useState<THREE.Group | null>(null);
   const clone = useMemo(() => scene.clone(true), [scene]);
@@ -815,6 +874,64 @@ function CullController({
   return null;
 }
 
+/**
+ * S3-I #131 — a node past the eager cap (SCENE_NODES_MAX/4) shows a wireframe bounds box until its
+ * first frame inside the camera frustum, then loads through useGLTF under its own Suspense (the box
+ * stays as the fallback, so loading never blanks the rest of the scene). In-view nodes load on the
+ * next frame without a camera move; a culled node loads when it is turned into view. The gizmo
+ * target (`force`) loads at once.
+ */
+function LazySceneNode({
+  transform,
+  force,
+  children,
+}: {
+  transform?: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+  };
+  force?: boolean;
+  children: ReactNode;
+}) {
+  const [load, setLoad] = useState(Boolean(force));
+  const ref = useRef<THREE.Group | null>(null);
+  const frustum = useMemo(() => new THREE.Frustum(), []);
+  const m = useMemo(() => new THREE.Matrix4(), []);
+  const c = useMemo(() => new THREE.Vector3(), []);
+  useEffect(() => {
+    if (force) setLoad(true);
+  }, [force]);
+  useFrame(({ camera }) => {
+    const g = ref.current;
+    if (load || !g) return;
+    camera.updateMatrixWorld();
+    m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(m);
+    g.updateWorldMatrix(true, false);
+    c.set(0, 0.5, 0).applyMatrix4(g.matrixWorld);
+    const s = g.getWorldScale(new THREE.Vector3());
+    const r = 0.87 * Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), 1e-3);
+    const planes = frustum.planes.map((p) => ({ nx: p.normal.x, ny: p.normal.y, nz: p.normal.z, c: p.constant }));
+    if (sphereInFrustum({ x: c.x, y: c.y, z: c.z, r }, planes)) setLoad(true);
+  });
+  const box = (
+    <group
+      ref={ref}
+      position={transform?.position ?? [0, 0, 0]}
+      rotation={transform?.rotation ?? [0, 0, 0]}
+      scale={transform?.scale ?? [1, 1, 1]}
+      userData={{ gpNode: true, gpLazy: true, gpKeep: force === true }}
+    >
+      <mesh name="lazy-placeholder" position={[0, 0.5, 0]}>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshBasicMaterial color="#7a8699" wireframe />
+      </mesh>
+    </group>
+  );
+  return load ? <Suspense fallback={box}>{children}</Suspense> : box;
+}
+
 function SceneNodeMissing({
   transform,
   label,
@@ -970,6 +1087,13 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [gltfClips, setGltfClips] = useState<string[]>([]);
   const [registerOpen, setRegisterOpen] = useState(false);
+  // S3-I #34 — New scene dialog (template + one picked asset per slot)
+  const [newSceneOpen, setNewSceneOpen] = useState(false);
+  const [tplId, setTplId] = useState<string | null>(null);
+  const [tplPicks, setTplPicks] = useState<Picks>({});
+  const [tplName, setTplName] = useState("");
+  const [tplErr, setTplErr] = useState<string | null>(null);
+  const [tplBusy, setTplBusy] = useState(false);
   const [regJson, setRegJson] = useState("");
   // S3-D #127 — inline slug-clash state for the register form
   const [regClash, setRegClash] = useState<SlugClash | null>(null);
@@ -994,6 +1118,15 @@ export function App() {
   const reducedMotion = resolveReducedMotion(motionPref, sysReduce);
   const canvasTheme = CANVAS_THEME[theme];
   const [clipUx, setClipUx] = useState<ClipUx>({});
+  // S3-I #81 — timeline markers: selected tick, inline rename, save error
+  const [markerSel, setMarkerSel] = useState<number | null>(null);
+  const [markerEdit, setMarkerEdit] = useState<{ i: number; draft: string; err: string | null } | null>(null);
+  const [markerErr, setMarkerErr] = useState<string | null>(null);
+  const [markerSaving, setMarkerSaving] = useState(false);
+  // S3-I #28 — scene thumbnail: per-id cache-buster for the card <img>, capture/upload error
+  const [thumbV, setThumbV] = useState<Record<string, number>>({});
+  const [thumbErr, setThumbErr] = useState<string | null>(null);
+  const r3fGet = useRef<(() => { gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera }) | null>(null);
   const [sceneNodeId, setSceneNodeId] = useState<string | null>(null);
   const [sceneDraft, setSceneDraft] = useState<SceneNodeDraft[]>([]);
   // S3-G CO-4 — data-scene-ready: scene JSON applied for this selection AND a frame rendered after it
@@ -1107,6 +1240,14 @@ export function App() {
   }, []);
   // S3-H #130 — drawn / total scene nodes (cull stats)
   const [cullStats, setCullStats] = useState<{ drawn: number; total: number }>({ drawn: 0, total: 0 });
+  // S3-I #131 — scene node ids whose GLB has resolved and mounted (reset when the selection changes)
+  const [loadedIds, setLoadedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const markLoaded = useCallback((id: string) => {
+    setLoadedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
+  useEffect(() => {
+    setLoadedIds(new Set());
+  }, [selected?.id]);
   // S3-H #69 — strong ETag from the last load/save of the selected asset; 412 prompt
   const etagRef = useRef<{ id: string; etag: string } | null>(null);
   const [etagPrompt, setEtagPrompt] = useState(false);
@@ -1581,10 +1722,11 @@ export function App() {
       writeLocalClipUx(selected.id, next);
       // Durable register field (prefer over localStorage-only).
       try {
+        const { markers: _keep, ...prefs } = next;
         const r = await fetch(`${API}/api/assets/${selected.id}/clip-ux`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(next),
+          body: JSON.stringify(prefs),
         });
         if (r.ok) {
           const updated = (await r.json()) as AssetMeta;
@@ -1634,6 +1776,114 @@ export function App() {
     setClipUx(next);
     if (clipUxTimer.current) window.clearTimeout(clipUxTimer.current);
     clipUxTimer.current = window.setTimeout(() => void persistClipUx(next), 300);
+  };
+
+  // S3-I #81 — markers save through PATCH clip-ux {markers} only; a 4xx is shown, nothing is kept locally
+  const markers: Marker[] = clipUx.markers ?? [];
+  const clipDurMs = clip ? selected?.clipDurations?.[clip] : undefined;
+  const saveMarkers = async (list: Marker[]): Promise<boolean> => {
+    if (!selected) return false;
+    setMarkerSaving(true);
+    setMarkerErr(null);
+    try {
+      const r = await fetch(`${API}/api/assets/${encodeURIComponent(selected.id)}/clip-ux`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markers: list }),
+      });
+      const textBody = await r.text();
+      if (!r.ok) {
+        let msg = `${r.status}`;
+        try {
+          const j = JSON.parse(textBody) as { code?: string; error?: string };
+          msg = `${j.code ?? r.status}: ${j.error ?? ""}`.trim();
+        } catch {
+          /* non-JSON */
+        }
+        setMarkerErr(`Markers not saved (${msg})`);
+        return false;
+      }
+      const updated = JSON.parse(textBody) as AssetMeta;
+      setClipUx((cur) => ({ ...cur, markers: cleanMarkers(updated.clipUx?.markers) }));
+      setAssets((list2) => list2.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      setSelected((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
+      return true;
+    } catch (err) {
+      setMarkerErr(`Markers not saved (${err})`);
+      return false;
+    } finally {
+      setMarkerSaving(false);
+    }
+  };
+  const jumpToMarker = (m: Marker) => {
+    const d = selected?.clipDurations?.[m.clip];
+    if (!Number.isFinite(d) || !d) return;
+    if (clip !== m.clip) setClip(m.clip);
+    setPlaying(false);
+    setScrubbing(false);
+    setScrub(Math.min(1, Math.max(0, m.t / (d as number))));
+  };
+  const addMarker = async () => {
+    if (!clip || !canAddMarker(markers, clipDurMs)) return;
+    const next = [...markers, { clip, t: markerTime(scrub, clipDurMs as number), name: nextMarkerName(markers) }];
+    if (await saveMarkers(next)) setMarkerSel(next.length - 1);
+  };
+  const deleteMarker = async (i: number) => {
+    if (await saveMarkers(markers.filter((_, j) => j !== i))) setMarkerSel(null);
+  };
+  const commitRename = async () => {
+    if (!markerEdit) return;
+    const problem = renameProblem(markers, markerEdit.i, markerEdit.draft);
+    if (problem) {
+      setMarkerEdit({ ...markerEdit, err: problem });
+      return;
+    }
+    const next = markers.map((m, j) => (j === markerEdit.i ? { ...m, name: markerEdit.draft.trim() } : m));
+    if (await saveMarkers(next)) setMarkerEdit(null);
+  };
+  useEffect(() => {
+    setMarkerSel(null);
+    setMarkerEdit(null);
+    setMarkerErr(null);
+  }, [selected?.id]);
+
+  // S3-I #28 — capture the current view as a 256×256 PNG and PUT it. The square crop is drawn into a 2D
+  // canvas in the same task as an explicit render, so the WebGL buffer is read before it is presented:
+  // no preserveDrawingBuffer on the live context. Non-fatal: a failed thumbnail never fails Save.
+  const captureSceneThumb = async (id: string) => {
+    const get = r3fGet.current;
+    if (!get) return;
+    setThumbErr(null);
+    try {
+      const { gl, scene, camera } = get();
+      const src = gl.domElement;
+      const { sx, sy, side } = squareCrop(src.width, src.height);
+      if (side < 1) throw new Error("viewer has no size");
+      const out = document.createElement("canvas");
+      out.width = THUMB_SIZE;
+      out.height = THUMB_SIZE;
+      const ctx = out.getContext("2d");
+      if (!ctx) throw new Error("no 2d context");
+      gl.render(scene, camera);
+      ctx.drawImage(src, sx, sy, side, side, 0, 0, THUMB_SIZE, THUMB_SIZE);
+      const blob = await new Promise<Blob | null>((res) => out.toBlob(res, "image/png"));
+      if (!blob) throw new Error("toBlob failed");
+      const known = etagRef.current?.id === id ? etagRef.current.etag : null;
+      const h: Record<string, string> = { "Content-Type": "image/png" };
+      if (known) h["If-Match"] = known;
+      const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}/preview`, { method: "PUT", headers: h, body: blob });
+      const textBody = await r.text();
+      if (!r.ok) throw new Error(`${r.status} ${textBody}`);
+      const tag = r.headers.get("ETag");
+      if (tag) etagRef.current = { id, etag: tag };
+      const j = JSON.parse(textBody) as { preview: string };
+      const patch = (a: AssetMeta) => (a.id === id ? { ...a, formats: { ...a.formats, preview: j.preview } } : a);
+      setAssets((list) => list.map(patch));
+      setSelected((cur) => (cur ? patch(cur) : cur));
+      setThumbV((m) => ({ ...m, [id]: Date.now() }));
+    } catch (err) {
+      setThumbErr(`Thumbnail not saved: ${err}`);
+    }
   };
 
   const selectClip = useCallback((name: string) => {
@@ -2121,6 +2371,7 @@ export function App() {
       setSelected((cur) =>
         cur && cur.id === updated.id ? { ...cur, ...updated } : cur,
       );
+      void captureSceneThumb(updated.id);
     } catch (err) {
       setSceneSaveError(`Save failed: ${err}`);
     } finally {
@@ -2136,6 +2387,18 @@ export function App() {
     },
     [assets],
   );
+  // S3-I #131 — loadable (has a GLB that passed preflight, not hidden) nodes; past the eager cap they are lazy
+  const lazyRows = isScene
+    ? sceneNodes.map((n, i) => {
+        const child = resolveChild(n.assetId);
+        const u = child?.formats?.glb ? `${API}/api/assets/${child.id}/file` : null;
+        const loadable = Boolean(u && preflight[u]?.ok) && (n as SceneNodeDraft).visible !== false;
+        return { id: n.id, loadable, lazy: isLazyIndex(i, sceneMaxNodes) };
+      })
+    : [];
+  const loadTotal = lazyRows.filter((r) => r.loadable).length;
+  const loadedCount = lazyRows.filter((r) => r.loadable && loadedIds.has(r.id)).length;
+  const placeholderIds = lazyRows.filter((r) => r.loadable && r.lazy && !loadedIds.has(r.id)).map((r) => r.id);
 
   const canPlay = clipsForUi.length > 0 && !isScene;
   const glbUrl =
@@ -2181,6 +2444,43 @@ export function App() {
         : stage === "mvp-billboard" || selected?.characterType === "billboard"
           ? "Billboard"
           : selected?.characterType ?? "—";
+
+  const closeNewScene = () => {
+    setNewSceneOpen(false);
+    setTplId(null);
+    setTplPicks({});
+    setTplName("");
+    setTplErr(null);
+  };
+  const tpl = SCENE_TEMPLATES.find((t) => t.id === tplId) ?? null;
+  async function createFromTemplate() {
+    if (!tpl || tplBusy) return;
+    const id = crypto.randomUUID();
+    const body = templateSceneBody(tpl, tplPicks, assets, { id, name: tplName, now: new Date().toISOString() });
+    if (!body) {
+      setTplErr("Pick an asset for every slot");
+      return;
+    }
+    setTplBusy(true);
+    setTplErr(null);
+    try {
+      const r = await fetch(`${API}/api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const text = await r.text();
+      if (noteRateLimit(r, text, "register")) return;
+      if (!r.ok) {
+        const clash = parseSlugClash(r.status, text);
+        setTplErr(clash ? `Name already used by ${clash.existingId}; try another name` : `Create failed: ${r.status} ${text.slice(0, 200)}`);
+        return;
+      }
+      closeNewScene();
+      deepLink.current = id;
+      await refresh();
+    } catch (err) {
+      setTplErr(`Create failed: ${err}`);
+    } finally {
+      setTplBusy(false);
+    }
+  }
 
   async function submitRegister() {
     try {
@@ -2335,6 +2635,7 @@ export function App() {
                   setGltfClips([]);
                 }}
               >
+                {a.stage === "scene" ? <SceneThumb asset={a} v={thumbV[a.id]} /> : null}
                 {selected?.id === a.id ? "★ " : ""}
                 {a.name || a.slug}
                 {(() => {
@@ -2457,6 +2758,82 @@ export function App() {
             </button>
           )}
         </details>
+        <button type="button" data-testid="new-scene" onClick={() => (newSceneOpen ? closeNewScene() : setNewSceneOpen(true))}>
+          New scene
+        </button>
+        {newSceneOpen && (
+          <div className="new-scene" role="dialog" aria-label="New scene" data-testid="new-scene-dialog">
+            <div className="template-options" role="radiogroup" aria-label="Template">
+              {SCENE_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={tplId === t.id}
+                  className={`tiny${tplId === t.id ? " primary" : ""}`}
+                  data-testid="template-option"
+                  data-template-id={t.id}
+                  onClick={() => {
+                    setTplId(t.id);
+                    setTplPicks({});
+                    setTplErr(null);
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {tpl && (
+              <>
+                {tpl.slots.map((slot) => {
+                  const opts = slotCandidates(assets, slot);
+                  return (
+                    <label key={slot.key} className="template-slot">
+                      <span>{slot.label}</span>
+                      <select
+                        data-testid="template-slot-pick"
+                        data-slot={slot.key}
+                        value={tplPicks[slot.key] ?? ""}
+                        disabled={!opts.length}
+                        onChange={(e) => setTplPicks((p) => ({ ...p, [slot.key]: e.target.value || undefined }))}
+                      >
+                        <option value="">{opts.length ? "Pick an asset…" : "No matching assets yet"}</option>
+                        {opts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name || a.slug || a.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
+                <label className="template-slot">
+                  <span>Scene name</span>
+                  <input data-testid="template-name" value={tplName} placeholder={`${tpl.label} scene`} onChange={(e) => setTplName(e.target.value)} />
+                </label>
+              </>
+            )}
+            {tplErr && (
+              <small role="alert" className="error" data-testid="template-error">
+                {tplErr}
+              </small>
+            )}
+            <div className="scene-author-actions">
+              <button
+                type="button"
+                className="primary"
+                data-testid="template-create"
+                disabled={!tpl || tplBusy || rlLeft > 0 || missingSlots(tpl, tplPicks).length > 0}
+                onClick={createFromTemplate}
+              >
+                Create scene
+              </button>
+              <button type="button" data-testid="template-cancel" onClick={closeNewScene}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <button type="button" className="primary" onClick={() => setRegisterOpen((o) => !o)}>
           Register asset
         </button>
@@ -2716,6 +3093,12 @@ export function App() {
                 </strong>
               </div>
             )}
+            {isScene && (
+              <div className="import-meta-row">
+                <span className="muted">GLBs</span>
+                <strong data-testid="stats-loaded">{loadedText(loadedCount, loadTotal)}</strong>
+              </div>
+            )}
           </div>
         )}
         <ErrorBoundary
@@ -2799,12 +3182,21 @@ export function App() {
             <span className="select-box-count">{viewerShellRef.current ? boxIds(selBox, viewerShellRef.current.querySelector(".viewer-canvas") as HTMLElement).length : 0}</span>
           </div>
         ) : null}
+        {/* S3-I #131 — DOM mirror of the wireframe placeholders still waiting to load (one per node). */}
+        {isScene && placeholderIds.length > 0 ? (
+          <ul className="lazy-placeholders" aria-hidden="true">
+            {placeholderIds.map((id) => (
+              <li key={id} data-testid="lazy-placeholder" data-node-id={id} />
+            ))}
+          </ul>
+        ) : null}
         {/* S3-D #86 — opaque drawing buffer: translucent GLB pixels must not show the page
             background through (visible once the clear colour differs from the chrome bg). */}
         <Canvas
           camera={{ position: [2, 1.5, 3], fov: 50 }}
           shadows={viewDraft.shadows}
           gl={{ alpha: false }}
+          onCreated={(st) => (r3fGet.current = st.get)}
         >
           <FirstFrame k={selected && sceneAppliedFor === selected.id ? selected.id : null} onFrame={setSceneFramedFor} />
           <color attach="background" args={[canvasTheme.clear]} />
@@ -2845,7 +3237,7 @@ export function App() {
           {isScene && multiCentroid ? <MultiGizmo at={multiCentroid} onCommit={moveSelection} snapStep={snapEnabled ? snapStep : null} /> : null}
           <Suspense fallback={null}>
             {isScene
-              ? sceneNodes.map((n) => {
+              ? sceneNodes.map((n, nodeIndex) => {
                   const child = resolveChild(n.assetId);
                   const childUrl = child
                     ? `${API}/api/assets/${child.id}/file`
@@ -2866,14 +3258,16 @@ export function App() {
                       />
                     );
                   }
-                  return (
+                  const nodeSelected = multiLive.length < 2 && sceneNodeId === n.id;
+                  const model = (
                     <SceneNodeModel
                       key={n.id}
                       url={childUrl!}
+                      onLoaded={() => markLoaded(n.id)}
                       clipName={reducedMotion ? undefined : clipForNode}
                       transform={n.transform}
                       highlighted={sceneNodeId === n.id || multiSel.includes(n.id)}
-                      selected={multiLive.length < 2 && sceneNodeId === n.id}
+                      selected={nodeSelected}
                       visible={(n as SceneNodeDraft).visible !== false}
                       gizmoMode={gizmoMode}
                       snapEnabled={snapEnabled}
@@ -2899,6 +3293,12 @@ export function App() {
                         );
                       }}
                     />
+                  );
+                  if (!isLazyIndex(nodeIndex, sceneMaxNodes) || (n as SceneNodeDraft).visible === false) return model;
+                  return (
+                    <LazySceneNode key={n.id} transform={n.transform} force={nodeSelected}>
+                      {model}
+                    </LazySceneNode>
                   );
                 })
               : glbUrl && !loadError && singlePreflight?.ok ? (
@@ -3326,6 +3726,11 @@ export function App() {
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
+            {thumbErr && (
+              <p className="muted" data-testid="scene-thumb-error">
+                {thumbErr}
+              </p>
+            )}
             {rateLimitNote("scene")}
             {(() => {
               // S3-D #127 / R1 §6 — V4a ambiguity links to the conflicting assets
@@ -4144,6 +4549,83 @@ export function App() {
               {duration > 0 ? `${(scrub * duration).toFixed(2)}s` : "—"}
             </span>
           </label>
+          {canPlay && clip ? (
+            <div className="timeline-markers" data-testid="timeline-markers">
+              <div className="marker-track" aria-label={`Markers on ${clip}`}>
+                {markersForClip(markers, clip).map(({ m, i }) =>
+                  markerEdit?.i === i ? (
+                    <span key={`e-${i}`} className="marker-edit" style={{ left: `${markerPct(m.t, clipDurMs)}%` }}>
+                      <input
+                        autoFocus
+                        data-testid="timeline-marker-rename"
+                        aria-label={`Rename marker ${m.name}`}
+                        maxLength={60}
+                        value={markerEdit.draft}
+                        onChange={(e) => setMarkerEdit({ i, draft: e.target.value, err: null })}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") void commitRename();
+                          if (e.key === "Escape") setMarkerEdit(null);
+                        }}
+                        onBlur={() => setMarkerEdit(null)}
+                      />
+                      {markerEdit.err && (
+                        <small className="err" role="alert" data-testid="timeline-marker-rename-error">
+                          {markerEdit.err}
+                        </small>
+                      )}
+                    </span>
+                  ) : (
+                    <button
+                      key={`m-${i}`}
+                      type="button"
+                      className={markerSel === i ? "marker-tick active" : "marker-tick"}
+                      data-testid="timeline-marker"
+                      data-marker-name={m.name}
+                      data-marker-t={m.t}
+                      aria-pressed={markerSel === i}
+                      aria-label={`Marker ${m.name} at ${m.t} ms`}
+                      title={`${m.name} · ${m.t} ms (double-click to rename)`}
+                      style={{ left: `${markerPct(m.t, clipDurMs)}%` }}
+                      onClick={() => {
+                        setMarkerSel(i);
+                        jumpToMarker(m);
+                      }}
+                      onDoubleClick={() => setMarkerEdit({ i, draft: m.name, err: null })}
+                    />
+                  ),
+                )}
+              </div>
+              <button
+                type="button"
+                data-testid="timeline-marker-add"
+                disabled={markerSaving || !canAddMarker(markers, clipDurMs)}
+                title={clipDurMs === undefined ? "No probed duration for this clip" : "Add a marker at the playhead"}
+                onClick={() => void addMarker()}
+              >
+                + Marker
+              </button>
+              {markerSel !== null && markers[markerSel] ? (
+                <button
+                  type="button"
+                  data-testid="timeline-marker-delete"
+                  disabled={markerSaving}
+                  aria-label={`Delete marker ${markers[markerSel].name}`}
+                  onClick={() => void deleteMarker(markerSel)}
+                >
+                  Delete marker
+                </button>
+              ) : null}
+              <span className="muted" data-testid="timeline-marker-hint">
+                {markerHint(markers.length)}
+              </span>
+              {markerErr && (
+                <span className="err" role="alert" data-testid="timeline-marker-error">
+                  {markerErr}
+                </span>
+              )}
+            </div>
+          ) : null}
           <span className="meta">Format: {formatLabel}</span>
         </div>
         </div>

@@ -11,8 +11,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { printRunHeader } from "../tests/reporters/skip-summary.mjs";
 
 const ROOT = process.cwd();
+printRunHeader();
 const arg = process.argv.slice(2).find((a) => /^\d+$/.test(a));
 const N = arg ? Number(arg) : 3;
 if (!(N >= 1 && N <= 20)) {

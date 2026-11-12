@@ -90,7 +90,10 @@ export function probeGlb(filePath) {
     clipDurations[name] = Math.round(maxT * 1000);
   }
 
+  // S3-I #59 — Draco only compresses mesh primitives; skins, animations and accessor min/max stay plain JSON
+  const required = jsonChunk.extensionsRequired || [];
   return {
+    meshCompression: required.includes("KHR_draco_mesh_compression") ? "draco" : "none",
     clips: animations,
     hasArmature: skins.length > 0,
     armatureCount: countArmatures(jsonChunk),

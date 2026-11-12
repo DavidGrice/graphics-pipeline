@@ -26,6 +26,8 @@ export const GOLDEN_SPECS = Object.freeze({
   billboard: { mode: "billboard", seed: 0, file: "billboard-spin.glb" },
   rigged: { mode: "rigged", seed: 0, file: "rigged-smoke.glb" },
   riggedSeed63: { mode: "rigged", seed: 63, file: "rigged-smoke-seed63.glb" },
+  // S3-I #59 — the same rigged export with `--draco` (plain and Draco each pin their own hash)
+  riggedDraco: { mode: "rigged", seed: 0, file: "rigged-smoke-draco.glb", draco: true },
 });
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -63,6 +65,7 @@ export function validateGolden(golden) {
     }
     if (e.mode !== GOLDEN_SPECS[key].mode) errs.push(`${key}: mode mismatch`);
     if (e.seed !== GOLDEN_SPECS[key].seed) errs.push(`${key}: seed mismatch`);
+    if (Boolean(e.draco) !== Boolean(GOLDEN_SPECS[key].draco)) errs.push(`${key}: draco mismatch`);
     if (typeof e.blenderVersion !== "string" || !e.blenderVersion) {
       errs.push(`${key}: blenderVersion required`);
     }
@@ -125,6 +128,7 @@ export function verifyGoldens({ blenderBin, golden, workDir }) {
       blenderBin,
       mode: spec.mode,
       seed: spec.seed,
+      draco: Boolean(spec.draco),
       inPng: png,
       outGlb: path.join(workDir, spec.file),
     });
@@ -138,13 +142,13 @@ export function verifyGoldens({ blenderBin, golden, workDir }) {
  * Export twice in separate clean dirs; refuse unless byte-identical (R1 HARDEN).
  * Throws E_GOLDEN_UNSTABLE on mismatch.
  */
-export function generateStable({ blenderBin, mode, seed, inPng, workDir, file }) {
+export function generateStable({ blenderBin, mode, seed, inPng, workDir, file, draco = false }) {
   const a = path.join(workDir, "run1");
   const b = path.join(workDir, "run2");
   fs.mkdirSync(a, { recursive: true });
   fs.mkdirSync(b, { recursive: true });
-  const r1 = generateGlb({ blenderBin, mode, seed, inPng, outGlb: path.join(a, file) });
-  const r2 = generateGlb({ blenderBin, mode, seed, inPng, outGlb: path.join(b, file) });
+  const r1 = generateGlb({ blenderBin, mode, seed, draco, inPng, outGlb: path.join(a, file) });
+  const r2 = generateGlb({ blenderBin, mode, seed, draco, inPng, outGlb: path.join(b, file) });
   if (r1.sha256 !== r2.sha256) {
     throw new GoldenError(
       "E_GOLDEN_UNSTABLE",
@@ -181,8 +185,8 @@ export function makeFixturePng(dir) {
 }
 
 /** Run pipeline.sh → GLB; returns { glb, sha256 }. */
-export function generateGlb({ blenderBin, mode, seed, inPng, outGlb }) {
-  execFileSync("bash", [PIPELINE_SH, inPng, outGlb], {
+export function generateGlb({ blenderBin, mode, seed, inPng, outGlb, draco = false }) {
+  execFileSync("bash", [PIPELINE_SH, ...(draco ? ["--draco"] : []), inPng, outGlb], {
     env: { ...process.env, BLENDER_BIN: blenderBin, MODE: mode, SMOKE_MODE: mode, SEED: String(seed) },
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 180000,

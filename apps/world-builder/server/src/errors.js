@@ -32,13 +32,37 @@ export function sendError(res, status, code, message, extra) {
 
 /** S3-H Leader ruling (D2) — 400 bodies may echo caller values, each capped at 200 characters. */
 export const ECHO_MAX = 200;
+/** S3-I CO-1 — first 20 items of every echoed array; not an env. */
+export const ECHO_ITEMS_MAX = 20;
 const capStr = (s) => (s.length > ECHO_MAX ? `${s.slice(0, ECHO_MAX - 1)}…` : s);
-/** Deep-cap every string in the structured extras (invalid[], issues[].received, field …). */
-export function capEcho(v, depth = 0) {
+/** Deep-cap strings at 200 and arrays at ECHO_ITEMS_MAX. When items are dropped, a top-level
+ *  object also gets `truncated` equal to the sum of drops (absent when nothing is dropped). */
+export function capEcho(v, depth = 0, acc) {
+  const own = !acc;
+  const box = acc ?? { dropped: 0 };
+  const out = capEchoWalk(v, depth, box);
+  if (own && depth === 0 && box.dropped > 0 && out && typeof out === "object" && !Array.isArray(out)) {
+    return { ...out, truncated: box.dropped };
+  }
+  return out;
+}
+function capEchoWalk(v, depth, box) {
   if (typeof v === "string") return capStr(v);
-  if (depth > 8 || !v || typeof v !== "object") return v;
-  if (Array.isArray(v)) return v.map((x) => capEcho(x, depth + 1));
-  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capEcho(x, depth + 1)]));
+  if (!v || typeof v !== "object") return v;
+  // S-I-1 — past depth 8 the walk stops, but nothing deeper is echoed raw: the value is dropped
+  // (counted in `truncated` when it is a non-empty array, else replaced by null).
+  if (depth > 8) {
+    if (Array.isArray(v)) {
+      box.dropped += v.length;
+      return [];
+    }
+    return null;
+  }
+  if (Array.isArray(v)) {
+    if (v.length > ECHO_ITEMS_MAX) box.dropped += v.length - ECHO_ITEMS_MAX;
+    return v.slice(0, ECHO_ITEMS_MAX).map((x) => capEchoWalk(x, depth + 1, box));
+  }
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capEchoWalk(x, depth + 1, box)]));
 }
 /** Cap quoted echoes inside human text (zod: "…, received '<value>'"); server text is untouched. */
 export function capQuoted(m) {

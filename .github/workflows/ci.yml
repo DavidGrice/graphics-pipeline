@@ -112,6 +112,7 @@ jobs:
           UI_URL: http://localhost:5174/
           WORLD_API: http://127.0.0.1:8788
           CHROME_BIN: /usr/bin/google-chrome
+          WB_DATA_ROOT: ${{ runner.temp }}/wb-data
         run: npm run test:ui:repeat -- 2
 
 
@@ -157,6 +158,46 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
           WB_DATA_ROOT: ${{ runner.temp }}/wb-data-pop
         run: npm run test:ui:repeat -- 1
+
+  # S3-I #105 — perf budgets (perf-budgets.json) on Node 24 only. Hermetic stack on 8790/5176.
+  # frame256Ms is a SwiftShader number on this runner, not a native GPU budget.
+  perf-budgets:
+    name: perf-budgets (Node 24)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build asset schema
+        run: npm run build:schema --if-present
+      - name: Start API (8790) + Vite (5176)
+        run: |
+          set -euo pipefail
+          data="${RUNNER_TEMP}/wb-data-perf"
+          mkdir -p "${data}"
+          PORT=8790 WB_DATA_ROOT="${data}" RATE_LIMIT_PER_MIN=100000 KRITA_HEALTH_MODE=off MONGO_URI=mongodb://127.0.0.1:1 \
+            nohup node apps/world-builder/server/src/index.js > "${RUNNER_TEMP}/api-perf.log" 2>&1 &
+          (cd apps/world-builder/client && VITE_PORT=5176 WB_API_PORT=8790 nohup npx vite > "${RUNNER_TEMP}/vite-perf.log" 2>&1 &)
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8790/api/health >/dev/null && curl -fsS http://localhost:5176/ >/dev/null; then
+              echo "stack up"; exit 0
+            fi
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/api-perf.log" "${RUNNER_TEMP}/vite-perf.log"
+          exit 1
+      - name: Perf budgets (node scripts/perf-budget.mjs)
+        env:
+          UI_URL: http://localhost:5176/
+          WORLD_API: http://127.0.0.1:8790
+          CHROME_BIN: /usr/bin/google-chrome
+          WB_DATA_ROOT: ${{ runner.temp }}/wb-data-perf
+          PERF_REQUIRE_UI: "1"
+        run: node scripts/perf-budget.mjs
 
   # S3-E #144 gitleaks (full history) + #107 actionlint/shellcheck. Tools are pinned and checksum-verified;
   # the npm scripts print SKIP_PLATFORM only where a tool is absent (local dev), never here.

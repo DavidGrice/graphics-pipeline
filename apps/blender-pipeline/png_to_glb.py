@@ -543,7 +543,50 @@ def _add_rigged_clip_actions(bpy, arm) -> None:
     print("OK: Actions idle + walk + run + jump on armature")
 
 
-def _export_glb(bpy, out_path: Path) -> None:
+DRACO_EXT = "KHR_draco_mesh_compression"
+# S3-I #59 — fixed encoder settings so the Draco golden hash is reproducible
+DRACO_KWARGS = dict(
+    export_draco_mesh_compression_enable=True,
+    export_draco_mesh_compression_level=6,
+    export_draco_position_quantization=14,
+    export_draco_normal_quantization=10,
+    export_draco_texcoord_quantization=12,
+    export_draco_color_quantization=10,
+    export_draco_generic_quantization=12,
+)
+EXIT_NO_DRACO = 6
+
+
+def _draco_encoder_available() -> bool:
+    """True when this Blender ships the Draco bridge library the glTF exporter loads."""
+    try:
+        from io_scene_gltf2.io.com.library import dll_exists  # type: ignore
+
+        return bool(dll_exists())
+    except Exception:  # noqa: BLE001 - older/newer add-on layouts
+        try:
+            from io_scene_gltf2.io.com.library import dll_path  # type: ignore
+
+            return dll_path("bf_intern_draco_bridge", "Draco").exists()
+        except Exception:  # noqa: BLE001
+            return False
+
+
+def _glb_extensions_required(path: Path) -> list:
+    import json
+    import struct
+
+    data = path.read_bytes()
+    if len(data) < 20:
+        return []
+    clen = struct.unpack_from("<I", data, 12)[0]
+    try:
+        return list(json.loads(data[20 : 20 + clen].decode("utf-8")).get("extensionsRequired", []))
+    except ValueError:
+        return []
+
+
+def _export_glb(bpy, out_path: Path, draco: bool = False) -> None:
     """Atomic write via sibling *.tmp.glb (must end in .glb for the exporter)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_name(out_path.stem + ".tmp.glb")
@@ -572,10 +615,16 @@ def _export_glb(bpy, out_path: Path) -> None:
         export_yup=True,
         export_apply=False,
     )
+    if draco:
+        kwargs.update(DRACO_KWARGS)
     try:
         try:
             result = _call_op_tolerant(gltf, **kwargs)
         except Exception as exc:
+            if draco:
+                # never fall back to an uncompressed export when --draco was asked for
+                print(f"ERROR: Draco GLB export failed: {exc}", file=sys.stderr)
+                raise SystemExit(4) from exc
             try:
                 result = gltf(
                     filepath=str(tmp_path),
@@ -602,6 +651,9 @@ def _export_glb(bpy, out_path: Path) -> None:
                 file=sys.stderr,
             )
             raise SystemExit(4)
+        if draco and DRACO_EXT not in _glb_extensions_required(tmp_path):
+            print(f"ERROR: --draco export is missing {DRACO_EXT} in extensionsRequired", file=sys.stderr)
+            raise SystemExit(4)
         tmp_path.replace(out_path)
     finally:
         if tmp_path.exists():
@@ -627,6 +679,11 @@ def _pop_gltf_separate(args: list[str]) -> tuple[list[str], Path | None]:
         out.append(args[i])
         i += 1
     return out, debug_dir
+
+
+def _pop_flag(args: list[str], flag: str) -> tuple[list[str], bool]:
+    """S3-I #59 — remove a boolean flag (any position) from args."""
+    return [a for a in args if a != flag], flag in args
 
 
 def _export_gltf_separate(bpy, debug_dir: Path, stem: str) -> None:
@@ -670,6 +727,10 @@ def main() -> None:
 
     args = _argv_after_double_dash(sys.argv)
     args, gltf_debug_dir = _pop_gltf_separate(args)
+    args, draco = _pop_flag(args, "--draco")
+    if draco and not _draco_encoder_available():
+        print("ERROR: --draco requested but this Blender has no Draco encoder library", file=sys.stderr)
+        raise SystemExit(EXIT_NO_DRACO)
     mode, in_png, out_glb, seed = _parse_mode_and_paths(args)
     _set_seed(seed)
 
@@ -692,8 +753,8 @@ def main() -> None:
     if not _mesh_is_exportable(plane):
         print("ERROR: mesh became invalid after animation/rig steps.", file=sys.stderr)
         raise SystemExit(4)
-    _export_glb(bpy, out_glb)
-    print(f"OK: wrote {out_glb} mode={mode} seed={seed} ({action_note})")
+    _export_glb(bpy, out_glb, draco=draco)
+    print(f"OK: wrote {out_glb} mode={mode} seed={seed} draco={'yes' if draco else 'no'} ({action_note})")
     if gltf_debug_dir is not None:
         _export_gltf_separate(bpy, gltf_debug_dir, out_glb.stem)
 

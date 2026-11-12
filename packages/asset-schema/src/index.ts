@@ -78,6 +78,17 @@ export const ClipUxSchema = z
       .min(CLIP_TIMESCALE_MIN, "clipUx.timeScale must be 0.5–2.0")
       .max(CLIP_TIMESCALE_MAX, "clipUx.timeScale must be 0.5–2.0")
       .optional(),
+    /** S3-I #81 timeline markers on the asset (clip must be in clips[], t within the probed duration: route-checked). */
+    markers: z
+      .array(
+        z.object({
+          clip: z.string().min(1),
+          t: z.number().int().min(0),
+          name: z.string().min(1).max(40),
+        }),
+      )
+      .max(16, "clipUx.markers allows at most 16 markers")
+      .optional(),
   })
   .optional();
 
