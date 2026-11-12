@@ -29,6 +29,7 @@
 ## §5 #28 scene thumbnail (E2)
 - On Save, offscreen 256×256 PNG of the current view (`preserveDrawingBuffer` only for the capture), `PUT /api/assets/:id/preview` as `image/png`. Stored at the existing `formats.preview` path (default `assets/<id>/preview.png`) under `WB_DATA_ROOT`, never in git. `GET /api/assets/:id/preview` already serves it.
 - Only `stage=scene` is accepted (else 400 `VALIDATION {field:"stage"}`). A body that is not a 256×256 PNG → 400 `VALIDATION {field:"body"}`. `If-Match` is opt-in, same as #69.
+- As shipped (`815b0c0`): body cap `THUMB_MAX_BYTES` = 512 KiB (524288 bytes); larger → 413 `PAYLOAD_TOO_LARGE` from the body parser, **before** the 404. Order: 413 → 404 → opt-in `If-Match` (412) → 400 `{field:"stage"}` → 400 `{field:"body"}`. Only `Content-Type: image/png` is read; anything else is an empty body → 400 `{field:"body"}`. The PNG check is signature, IHDR (with CRC), 256×256 and a trailing IEND; pixels are never decoded. A stored `formats.preview` that fails the path guard → 400 with the guard's code and `field:"formats.preview"`. 200 body `{id, bytes, preview}` plus the current `ETag`; the asset doc changes only when `formats.preview` was empty or not a `.png`. No activity entry.
 - Offscreen capture and any pixel assertion run against **SwiftShader** on the Linux box (`--use-angle=swiftshader`), same renderer as the 3-H WebGL path.
 - Scene list card shows the image; when missing, the fallback is the scene initial on a neutral tile. Test ids: `scene-thumb`, `scene-thumb-fallback`.
 
@@ -43,6 +44,7 @@
 
 ## §8 #81 timeline markers (E2)
 - Additive `clipUx.markers:[{clip, t, name}]` on the **asset** (not on `scene.nodes` — nodes have no `clipUx`). Cap 16, unique names, name 1..40, `clip` must be in `clips[]`, `t` is an integer ms in `[0, clipDurations[clip]]`. More than 16 → 400 `VALIDATION {field:"clipUx.markers"}`.
+- As shipped (`815b0c0`): every bad marker (not an array, over 16, bad/duplicate name, clip not in `clips[]`, a clip with no probed duration, `t` not an integer ≥0 or past the clip's duration) → 400 `VALIDATION {field:"clipUx.markers"}`. A clip-ux PATCH that leaves out `markers` keeps the stored markers; `markers: []` clears them. Schema stays 3.
 - Saved through the existing `PATCH /api/assets/:id/clip-ux` (opt-in `If-Match` from #69). Ticks on the scrubber; click jumps playback; double-click renames; at cap "16 of 16 markers" (Add disabled).
 - Test ids: `timeline-marker`, `timeline-marker-add`, `timeline-marker-delete`.
 

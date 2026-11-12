@@ -44,9 +44,9 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 
 ## 7. #28: scene thumbnail (E2)
 - On Save, the client captures an offscreen 256×256 PNG of the current view (`preserveDrawingBuffer` only for the capture) and `PUT`s it to `/api/assets/:id/preview` as `image/png`. Stored at the existing `formats.preview` path (default `assets/<id>/preview.png`) under `WB_DATA_ROOT`, never in git. `GET /api/assets/:id/preview` already serves it.
-- Only `stage=scene` is accepted (else 400 `VALIDATION {field:"stage"}`). A body that is not a 256×256 PNG → 400 `VALIDATION {field:"body"}`. `If-Match` is opt-in, same as #69. The scene list card shows the image; when missing, the fallback is the scene initial on a neutral tile (`scene-thumb-fallback`).
+- Only `stage=scene` is accepted (else 400 `VALIDATION {field:"stage"}`). A body that is not a 256×256 PNG → 400 `VALIDATION {field:"body"}`. A body over `THUMB_MAX_BYTES` (512 KiB, 524288 bytes) → 413 `PAYLOAD_TOO_LARGE`, raised by the body parser before the asset lookup, so it can come before a 404. `If-Match` is opt-in, same as #69. Order: 413 → 404 → 412 → 400 `stage` → 400 `body` → 200 `{id, bytes, preview}` + current `ETag`. No activity entry (no new kinds). The scene list card shows the image; when missing, the fallback is the scene initial on a neutral tile (`scene-thumb-fallback`).
 - Offscreen capture and any pixel assertion run against **SwiftShader** on the Linux box (`--use-angle=swiftshader`), same renderer as the 3-H WebGL path.
-- **Tests:** PUT then GET is byte-identical; a non-scene is 400; a non-PNG is 400; the file is under `WB_DATA_ROOT`; the capture test is driven with SwiftShader.
+- **Tests:** PUT then GET is byte-identical; a non-scene is 400; a non-PNG is 400; over 512 KiB is 413; the file is under `WB_DATA_ROOT`; the capture test is driven with SwiftShader.
 
 ## 8. #131: lazy-load child GLBs (E2)
 - Nodes outside the frustum (#130) or past `SCENE_NODES_MAX/4` load on first visibility through drei `useGLTF` and Suspense. The placeholder is a wireframe bounds box (`lazy-placeholder`). The stats panel (#83) adds `Loaded n / total` (`stats-loaded`). No API change.
@@ -57,7 +57,7 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 - **Tests:** schema validation of both templates; creating one requires a picked asset per slot; cancelling leaves no scene.
 
 ## 10. #81: timeline markers (E2)
-- Additive `clipUx.markers:[{clip, t, name}]` on the **asset** (not on `scene.nodes` — nodes have no `clipUx`). Cap 16, unique names, name 1..40, `clip` must be in `clips[]`, `t` is an integer ms in `[0, clipDurations[clip]]`. More than 16 → 400 `VALIDATION {field:"clipUx.markers"}`.
+- Additive `clipUx.markers:[{clip, t, name}]` on the **asset** (not on `scene.nodes` — nodes have no `clipUx`). Cap 16, unique names, name 1..40, `clip` must be in `clips[]`, `t` is an integer ms in `[0, clipDurations[clip]]`. More than 16, or any bad marker → 400 `VALIDATION {field:"clipUx.markers"}`. A clip-ux PATCH without `markers` keeps the stored markers; `markers: []` clears them.
 - Saved through the existing `PATCH /api/assets/:id/clip-ux` (opt-in `If-Match` from #69). The scrubber shows ticks; click jumps playback; double-click renames; at cap the hint is "16 of 16 markers" and Add is disabled.
 - **Tests:** save and reload; the cap; a `t` past the duration is 400; a missing clip is 400.
 
