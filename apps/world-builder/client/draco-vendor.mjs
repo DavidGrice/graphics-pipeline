@@ -53,11 +53,22 @@ export function vendorDraco({ dir = DRACO_DIR, manifest = readManifest(), three 
   return verifyDraco(dir, manifest);
 }
 
-/** Vite plugin: vendor + verify before dev serve and before every build. */
+/** drei's built-in default decoder URL (unused: every useGLTF passes DRACO_PATH); stripped from the bundle. */
+export const CDN_DECODER_RE = /https:\/\/www\.gstatic\.com\/draco\/versioned\/decoders\/[0-9.]+\//g;
+export const stripCdnDecoder = (code) => {
+  const out = code.replace(CDN_DECODER_RE, "/draco/");
+  return out === code ? null : out;
+};
+
+/** Vite plugin: vendor + verify before dev serve and before every build; no CDN URL in the bundle. */
 export const dracoVendorPlugin = () => ({
   name: "gp-draco-vendor",
   buildStart() {
     vendorDraco();
+  },
+  renderChunk(code) {
+    const out = stripCdnDecoder(code);
+    return out == null ? null : { code: out, map: null };
   },
 });
 

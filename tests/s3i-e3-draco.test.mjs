@@ -21,6 +21,7 @@ import { probeGlb } from "../apps/blender-pipeline/probe_glb.mjs";
 import {
   DRACO_CHECKSUM,
   readManifest,
+  stripCdnDecoder,
   threeRoot,
   vendorDraco,
   verifyDraco,
@@ -88,6 +89,15 @@ test("#59 viewer uses the vendored /draco/ decoder: no CDN, no setDecoderConfig"
       assert.doesNotMatch(fs.readFileSync(path.join(dist, "assets", f), "utf8"), /www\.gstatic\.com\/draco/, `dist ${f} keeps the CDN path`);
     }
   }
+});
+
+test("#59 bundle: drei's default CDN decoder URL is stripped at renderChunk", () => {
+  const drei = "let decoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/'; x";
+  assert.equal(stripCdnDecoder(drei), "let decoderPath = '/draco/'; x");
+  assert.equal(stripCdnDecoder(stripCdnDecoder(drei)), null, "idempotent");
+  assert.equal(stripCdnDecoder("no cdn here"), null);
+  const vendor = fs.readFileSync(path.join(CLIENT, "draco-vendor.mjs"), "utf8");
+  assert.match(vendor, /renderChunk\(code\)\s*\{\s*const out = stripCdnDecoder\(code\)/);
 });
 
 test("#59 golden specs pin plain and Draco rigged separately (#62)", () => {
