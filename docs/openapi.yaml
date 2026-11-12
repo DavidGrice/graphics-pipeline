@@ -400,7 +400,7 @@ paths:
     put:
       summary: Upload a scene thumbnail (S3-I #28)
       description: |
-        Body is raw `image/png`, exactly 256x256 (signature, IHDR and IEND checked), at most 512 KB.
+        Body is raw `image/png`, exactly 256x256 (signature, IHDR and IEND checked), at most 512 KiB (524288 bytes).
         Scene assets only. Order: 413 PAYLOAD_TOO_LARGE (body parser, so it can fire before 404) ->
         404 -> If-Match (opt-in, #69) -> 400 VALIDATION {field:"stage"} (not a scene) ->
         400 VALIDATION {field:"body"} (not a 256x256 PNG). Written atomically to formats.preview when it
@@ -432,7 +432,7 @@ paths:
         "412":
           $ref: "#/components/responses/PreconditionFailed"
         "413":
-          description: PAYLOAD_TOO_LARGE - body over 512 KB
+          description: PAYLOAD_TOO_LARGE - body over 512 KiB (524288 bytes)
     get:
       summary: Preview PNG
       parameters:
