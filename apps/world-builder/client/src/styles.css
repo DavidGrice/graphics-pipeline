@@ -900,3 +900,22 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
   clip: rect(0 0 0 0);
   list-style: none;
 }
+
+/* S3-I #34 — New scene dialog */
+.new-scene {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.template-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.template-slot {
+  display: grid;
+  gap: 0.2rem;
+}

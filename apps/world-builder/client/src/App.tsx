@@ -120,6 +120,7 @@ import {
   type History,
 } from "./s3gAuthor";
 import { navigate, NavLink, useOverlayPlacement } from "./s3gViews";
+import { SCENE_TEMPLATES, missingSlots, slotCandidates, templateSceneBody, type Picks } from "./s3iTemplates";
 import {
   THUMB_SIZE,
   canAddMarker,
@@ -1085,6 +1086,13 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [gltfClips, setGltfClips] = useState<string[]>([]);
   const [registerOpen, setRegisterOpen] = useState(false);
+  // S3-I #34 — New scene dialog (template + one picked asset per slot)
+  const [newSceneOpen, setNewSceneOpen] = useState(false);
+  const [tplId, setTplId] = useState<string | null>(null);
+  const [tplPicks, setTplPicks] = useState<Picks>({});
+  const [tplName, setTplName] = useState("");
+  const [tplErr, setTplErr] = useState<string | null>(null);
+  const [tplBusy, setTplBusy] = useState(false);
   const [regJson, setRegJson] = useState("");
   // S3-D #127 — inline slug-clash state for the register form
   const [regClash, setRegClash] = useState<SlugClash | null>(null);
@@ -2436,6 +2444,43 @@ export function App() {
           ? "Billboard"
           : selected?.characterType ?? "—";
 
+  const closeNewScene = () => {
+    setNewSceneOpen(false);
+    setTplId(null);
+    setTplPicks({});
+    setTplName("");
+    setTplErr(null);
+  };
+  const tpl = SCENE_TEMPLATES.find((t) => t.id === tplId) ?? null;
+  async function createFromTemplate() {
+    if (!tpl || tplBusy) return;
+    const id = crypto.randomUUID();
+    const body = templateSceneBody(tpl, tplPicks, assets, { id, name: tplName, now: new Date().toISOString() });
+    if (!body) {
+      setTplErr("Pick an asset for every slot");
+      return;
+    }
+    setTplBusy(true);
+    setTplErr(null);
+    try {
+      const r = await fetch(`${API}/api/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const text = await r.text();
+      if (noteRateLimit(r, text, "register")) return;
+      if (!r.ok) {
+        const clash = parseSlugClash(r.status, text);
+        setTplErr(clash ? `Name already used by ${clash.existingId}; try another name` : `Create failed: ${r.status} ${text.slice(0, 200)}`);
+        return;
+      }
+      closeNewScene();
+      deepLink.current = id;
+      await refresh();
+    } catch (err) {
+      setTplErr(`Create failed: ${err}`);
+    } finally {
+      setTplBusy(false);
+    }
+  }
+
   async function submitRegister() {
     try {
       const body = JSON.parse(regJson);
@@ -2712,6 +2757,82 @@ export function App() {
             </button>
           )}
         </details>
+        <button type="button" data-testid="new-scene" onClick={() => (newSceneOpen ? closeNewScene() : setNewSceneOpen(true))}>
+          New scene
+        </button>
+        {newSceneOpen && (
+          <div className="new-scene" role="dialog" aria-label="New scene" data-testid="new-scene-dialog">
+            <div className="template-options" role="radiogroup" aria-label="Template">
+              {SCENE_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={tplId === t.id}
+                  className={`tiny${tplId === t.id ? " primary" : ""}`}
+                  data-testid="template-option"
+                  data-template-id={t.id}
+                  onClick={() => {
+                    setTplId(t.id);
+                    setTplPicks({});
+                    setTplErr(null);
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {tpl && (
+              <>
+                {tpl.slots.map((slot) => {
+                  const opts = slotCandidates(assets, slot);
+                  return (
+                    <label key={slot.key} className="template-slot">
+                      <span>{slot.label}</span>
+                      <select
+                        data-testid="template-slot-pick"
+                        data-slot={slot.key}
+                        value={tplPicks[slot.key] ?? ""}
+                        disabled={!opts.length}
+                        onChange={(e) => setTplPicks((p) => ({ ...p, [slot.key]: e.target.value || undefined }))}
+                      >
+                        <option value="">{opts.length ? "Pick an asset…" : "No matching assets yet"}</option>
+                        {opts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name || a.slug || a.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
+                <label className="template-slot">
+                  <span>Scene name</span>
+                  <input data-testid="template-name" value={tplName} placeholder={`${tpl.label} scene`} onChange={(e) => setTplName(e.target.value)} />
+                </label>
+              </>
+            )}
+            {tplErr && (
+              <small role="alert" className="error" data-testid="template-error">
+                {tplErr}
+              </small>
+            )}
+            <div className="scene-author-actions">
+              <button
+                type="button"
+                className="primary"
+                data-testid="template-create"
+                disabled={!tpl || tplBusy || rlLeft > 0 || missingSlots(tpl, tplPicks).length > 0}
+                onClick={createFromTemplate}
+              >
+                Create scene
+              </button>
+              <button type="button" data-testid="template-cancel" onClick={closeNewScene}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <button type="button" className="primary" onClick={() => setRegisterOpen((o) => !o)}>
           Register asset
         </button>
