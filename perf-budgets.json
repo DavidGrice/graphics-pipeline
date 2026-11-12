@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "note": "S3-I #105 — CI budgets (scripts/perf-budget.mjs, ci.yml perf-budgets job, Node 24). frame256Ms is a SwiftShader number on the Linux runner/box (CHROME_ARGS), not a native GPU budget. Calibrated 2026-11-12 on 134a1b2: medians 83.3/66.7/83.3 ms over 3 runs; budget is ~3x for runner headroom.",
+  "fixtureGlbBytes": {
+    "rigged-synth": 4096
+  },
+  "frame256Ms": {
+    "budget": 250,
+    "renderer": "swiftshader",
+    "frames": 120,
+    "warmup": 30
+  }
+}

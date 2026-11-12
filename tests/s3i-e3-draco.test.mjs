@@ -83,11 +83,22 @@ test("#59 viewer uses the vendored /draco/ decoder: no CDN, no setDecoderConfig"
   assert.match(vite, /dracoVendorPlugin\(\)/, "vite must vendor + verify the decoder on dev and build");
   const ignore = fs.readFileSync(path.join(ROOT, ".gitignore"), "utf8");
   assert.match(ignore, /^apps\/world-builder\/client\/public\/draco\/\*$/m, "decoder bytes stay out of git");
-  const dist = path.join(CLIENT, "dist");
-  if (fs.existsSync(dist)) {
-    for (const f of fs.readdirSync(path.join(dist, "assets")).filter((n) => n.endsWith(".js"))) {
-      assert.doesNotMatch(fs.readFileSync(path.join(dist, "assets", f), "utf8"), /www\.gstatic\.com\/draco/, `dist ${f} keeps the CDN path`);
+  // Build-or-fail (never skip): a fresh vite build into a temp outDir, so a stale or missing dist can't pass.
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), "s3i-draco-dist-"));
+  try {
+    const b = spawnSync("npx", ["vite", "build", "--outDir", dist, "--emptyOutDir", "--logLevel", "warn"], {
+      cwd: CLIENT,
+      encoding: "utf8",
+      timeout: 240_000,
+    });
+    assert.equal(b.status, 0, `vite build failed (status ${b.status}): ${(b.stderr || "").slice(-800)}`);
+    const js = fs.readdirSync(path.join(dist, "assets")).filter((n) => n.endsWith(".js"));
+    assert.ok(js.length > 0, "vite build produced no JS chunks");
+    for (const f of js) {
+      assert.doesNotMatch(fs.readFileSync(path.join(dist, "assets", f), "utf8"), /gstatic|unpkg|jsdelivr/i, `bundle ${f} references a CDN`);
     }
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
   }
 });
 
