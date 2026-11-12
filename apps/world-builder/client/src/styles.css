@@ -875,10 +875,10 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
   top: 4px;
   width: 2px;
   height: 22px;
-  background: var(--accent, #4a8cff);
+  background: var(--accent);
 }
 .marker-tick.active::after { width: 4px; left: 10px; }
-.marker-tick:focus-visible { outline: 2px solid var(--accent, #4a8cff); }
+.marker-tick:focus-visible { outline: 2px solid var(--accent); }
 .marker-edit {
   position: absolute;
   top: 0;
