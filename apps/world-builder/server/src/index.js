@@ -26,6 +26,8 @@ import { legacyKrita, parseBridgeMode, probeBridge } from "./bridge.js";
 import { parseBulkMax, readZipEntries, readZipEntry, entryEscapes, slugFromEntryName, ZipFormatError } from "./bulk.js";
 import { cachedProbeAsync } from "../../../blender-pipeline/probe_cache.mjs";
 import { assertSingleArmature } from "../../../blender-pipeline/probe_glb.mjs";
+import { markersProblem } from "./markers.js";
+import { thumbProblem, THUMB_MAX_BYTES } from "./thumb.js";
 import { createFeaturedStore, featuredProblem, parsePublicBaseUrl } from "./featured.js";
 
 /**
@@ -1160,6 +1162,14 @@ app.patch("/api/assets/:id/clip-ux", async (req, res) => {
         clipUx[key] = body[key];
       }
     }
+    // S3-I #81 — markers: validated against the asset's clips and probed durations; absent → kept as-is
+    if (Object.prototype.hasOwnProperty.call(body, "markers")) {
+      const problem = markersProblem(body.markers, existing);
+      if (problem) return sendError(res, 400, "VALIDATION", problem, { field: "clipUx.markers" });
+      clipUx.markers = body.markers.map((m) => ({ clip: m.clip, t: m.t, name: m.name }));
+    } else if (Array.isArray(existing.clipUx?.markers)) {
+      clipUx.markers = existing.clipUx.markers;
+    }
     const uxParsed = ClipUxSchema.safeParse(clipUx);
     if (!uxParsed.success) return sendValidation(res, uxParsed);
     const next = {
@@ -1265,6 +1275,64 @@ app.get("/api/assets/:id/file", async (req, res) => {
     sendInternal(req, res, err);
   }
 });
+
+
+/**
+ * S3-I #28 — PUT /api/assets/:id/preview (body: image/png, exactly 256x256). Scene assets only.
+ * Order: 413 PAYLOAD_TOO_LARGE (body parser, before lookup) -> 404 -> If-Match (opt-in, #69) -> 400 VALIDATION {field:"stage"} -> 400 VALIDATION {field:"body"}.
+ * Stored at formats.preview (default assets/<id>/preview.png) under WB_DATA_ROOT. The doc is only touched when
+ * formats.preview was empty or not a .png; the response carries the current ETag. No activity entry (no new kinds).
+ */
+const rawPng = express.raw({ type: "image/png", limit: THUMB_MAX_BYTES });
+app.put(
+  "/api/assets/:id/preview",
+  (req, res, next) =>
+    rawPng(req, res, (err) => {
+      if (err?.type === "entity.too.large") {
+        return sendError(res, 413, "PAYLOAD_TOO_LARGE", `preview exceeds ${THUMB_MAX_BYTES} bytes`);
+      }
+      return next(err);
+    }),
+  async (req, res) => {
+    try {
+      const id = req.params.id;
+      const col = collection();
+      const existing = col ? await col.findOne({ id }) : memoryAssets.get(id) ?? null;
+      if (!existing) return sendError(res, 404, "NOT_FOUND", "not found");
+      if (rejectIfMatch(req, res, existing)) return;
+      if (existing.stage !== "scene") {
+        return sendError(res, 400, "VALIDATION", "preview can only be set on a scene asset", { field: "stage" });
+      }
+      const problem = thumbProblem(Buffer.isBuffer(req.body) ? req.body : null);
+      if (problem) return sendError(res, 400, "VALIDATION", problem, { field: "body" });
+      const cur = existing.formats?.preview;
+      const rel = typeof cur === "string" && /\.png$/i.test(cur) ? cur : `assets/${id}/preview.png`;
+      let abs;
+      try {
+        abs = resolveUnder(DATA_ROOT, rel, { stripPrefix: /^data\// });
+      } catch (err) {
+        if (err instanceof PathGuardError) {
+          return sendError(res, 400, err.code, `stored path rejected (${err.reason})`, { field: "formats.preview" });
+        }
+        throw err;
+      }
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      const tmp = `${abs}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, req.body);
+      fs.renameSync(tmp, abs);
+      let next = existing;
+      if (rel !== cur) {
+        next = { ...existing, formats: { ...existing.formats, preview: rel } };
+        if (col) await col.updateOne({ id }, { $set: { "formats.preview": rel } });
+        else memoryAssets.set(id, next);
+      }
+      setEtag(res, next);
+      res.status(200).json({ id, bytes: req.body.length, preview: rel });
+    } catch (err) {
+      sendInternal(req, res, err);
+    }
+  },
+);
 
 app.get("/api/assets/:id/preview", async (req, res) => {
   try {
