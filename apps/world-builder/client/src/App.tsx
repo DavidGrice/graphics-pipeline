@@ -4,6 +4,7 @@
  */
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
+import { DRACO_PATH } from "./s3iDraco";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent, ReactNode } from "react";
 import * as THREE from "three";
@@ -471,7 +472,7 @@ function GltfPlayer({
   bones?: boolean;
   shadows?: boolean;
 }) {
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(url, DRACO_PATH);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const prevClipRef = useRef<string | null>(null);
@@ -669,7 +670,7 @@ function SceneNodeModel({
   bones?: boolean;
   shadows?: boolean;
 }) {
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(url, DRACO_PATH);
   const onLoadedRef = useRef(onLoaded);
   onLoadedRef.current = onLoaded;
   useEffect(() => {

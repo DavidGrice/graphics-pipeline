@@ -5,6 +5,7 @@
  */
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF } from "@react-three/drei";
+import { DRACO_PATH } from "./s3iDraco";
 import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import * as THREE from "three";
@@ -81,7 +82,7 @@ export function useOverlayPlacement(open: boolean, anchor: RefObject<HTMLElement
 type Stats = { tris?: number; bones?: number };
 
 function CompareModel({ url, onStats }: { url: string; onStats: (s: Stats) => void }) {
-  const { scene } = useGLTF(url);
+  const { scene } = useGLTF(url, DRACO_PATH);
   const clone = useMemo(() => scene.clone(true), [scene]);
   useEffect(() => {
     let tris = 0;
