@@ -120,6 +120,21 @@ import {
 } from "./s3gAuthor";
 import { navigate, NavLink, useOverlayPlacement } from "./s3gViews";
 import {
+  THUMB_SIZE,
+  canAddMarker,
+  cleanMarkers,
+  hasPngPreview,
+  markerHint,
+  markerPct,
+  markersForClip,
+  markerTime,
+  nextMarkerName,
+  renameProblem,
+  sceneInitial,
+  squareCrop,
+  type Marker,
+} from "./s3iE2";
+import {
   BLEND_MS_DEFAULT,
   BLEND_MS_MAX,
   TIMESCALE_DEFAULT,
@@ -154,6 +169,8 @@ type ClipUx = {
   blendMs?: number;
   /** S3-C #2 mixer timeScale (0.5–2.0). */
   timeScale?: number;
+  /** S3-I #81 timeline markers (asset-level, server-validated; never from localStorage). */
+  markers?: Marker[];
 };
 
 type SceneNodeDraft = {
@@ -307,7 +324,36 @@ function mergeClipUx(asset: AssetMeta | null): ClipUx {
     disabled: remote.disabled ?? local.disabled,
     blendMs: remote.blendMs ?? local.blendMs,
     timeScale: remote.timeScale ?? local.timeScale,
+    markers: cleanMarkers(remote.markers),
   };
+}
+
+/**
+ * S3-I #28 — scene list card image. Only a stored .png preview is requested; a missing file (404) or
+ * any load error shows the scene initial on a neutral tile. Decorative: the button keeps its name.
+ */
+function SceneThumb({ asset, v }: { asset: AssetMeta; v: number | undefined }) {
+  const [failed, setFailed] = useState(false);
+  const png = hasPngPreview(asset.formats?.preview);
+  useEffect(() => setFailed(false), [asset.id, v, png]);
+  if (!png || failed) {
+    return (
+      <span className="scene-thumb fallback" data-testid="scene-thumb-fallback" aria-hidden="true">
+        {sceneInitial(asset.name, asset.slug)}
+      </span>
+    );
+  }
+  return (
+    <img
+      className="scene-thumb"
+      data-testid="scene-thumb"
+      alt=""
+      width={32}
+      height={32}
+      src={`${API}/api/assets/${encodeURIComponent(asset.id)}/preview${v ? `?v=${v}` : ""}`}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 /**
@@ -994,6 +1040,15 @@ export function App() {
   const reducedMotion = resolveReducedMotion(motionPref, sysReduce);
   const canvasTheme = CANVAS_THEME[theme];
   const [clipUx, setClipUx] = useState<ClipUx>({});
+  // S3-I #81 — timeline markers: selected tick, inline rename, save error
+  const [markerSel, setMarkerSel] = useState<number | null>(null);
+  const [markerEdit, setMarkerEdit] = useState<{ i: number; draft: string; err: string | null } | null>(null);
+  const [markerErr, setMarkerErr] = useState<string | null>(null);
+  const [markerSaving, setMarkerSaving] = useState(false);
+  // S3-I #28 — scene thumbnail: per-id cache-buster for the card <img>, capture/upload error
+  const [thumbV, setThumbV] = useState<Record<string, number>>({});
+  const [thumbErr, setThumbErr] = useState<string | null>(null);
+  const r3fGet = useRef<(() => { gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera }) | null>(null);
   const [sceneNodeId, setSceneNodeId] = useState<string | null>(null);
   const [sceneDraft, setSceneDraft] = useState<SceneNodeDraft[]>([]);
   // S3-G CO-4 — data-scene-ready: scene JSON applied for this selection AND a frame rendered after it
@@ -1581,10 +1636,11 @@ export function App() {
       writeLocalClipUx(selected.id, next);
       // Durable register field (prefer over localStorage-only).
       try {
+        const { markers: _keep, ...prefs } = next;
         const r = await fetch(`${API}/api/assets/${selected.id}/clip-ux`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(next),
+          body: JSON.stringify(prefs),
         });
         if (r.ok) {
           const updated = (await r.json()) as AssetMeta;
@@ -1634,6 +1690,114 @@ export function App() {
     setClipUx(next);
     if (clipUxTimer.current) window.clearTimeout(clipUxTimer.current);
     clipUxTimer.current = window.setTimeout(() => void persistClipUx(next), 300);
+  };
+
+  // S3-I #81 — markers save through PATCH clip-ux {markers} only; a 4xx is shown, nothing is kept locally
+  const markers: Marker[] = clipUx.markers ?? [];
+  const clipDurMs = clip ? selected?.clipDurations?.[clip] : undefined;
+  const saveMarkers = async (list: Marker[]): Promise<boolean> => {
+    if (!selected) return false;
+    setMarkerSaving(true);
+    setMarkerErr(null);
+    try {
+      const r = await fetch(`${API}/api/assets/${encodeURIComponent(selected.id)}/clip-ux`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markers: list }),
+      });
+      const textBody = await r.text();
+      if (!r.ok) {
+        let msg = `${r.status}`;
+        try {
+          const j = JSON.parse(textBody) as { code?: string; error?: string };
+          msg = `${j.code ?? r.status}: ${j.error ?? ""}`.trim();
+        } catch {
+          /* non-JSON */
+        }
+        setMarkerErr(`Markers not saved (${msg})`);
+        return false;
+      }
+      const updated = JSON.parse(textBody) as AssetMeta;
+      setClipUx((cur) => ({ ...cur, markers: cleanMarkers(updated.clipUx?.markers) }));
+      setAssets((list2) => list2.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      setSelected((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
+      return true;
+    } catch (err) {
+      setMarkerErr(`Markers not saved (${err})`);
+      return false;
+    } finally {
+      setMarkerSaving(false);
+    }
+  };
+  const jumpToMarker = (m: Marker) => {
+    const d = selected?.clipDurations?.[m.clip];
+    if (!Number.isFinite(d) || !d) return;
+    if (clip !== m.clip) setClip(m.clip);
+    setPlaying(false);
+    setScrubbing(false);
+    setScrub(Math.min(1, Math.max(0, m.t / (d as number))));
+  };
+  const addMarker = async () => {
+    if (!clip || !canAddMarker(markers, clipDurMs)) return;
+    const next = [...markers, { clip, t: markerTime(scrub, clipDurMs as number), name: nextMarkerName(markers) }];
+    if (await saveMarkers(next)) setMarkerSel(next.length - 1);
+  };
+  const deleteMarker = async (i: number) => {
+    if (await saveMarkers(markers.filter((_, j) => j !== i))) setMarkerSel(null);
+  };
+  const commitRename = async () => {
+    if (!markerEdit) return;
+    const problem = renameProblem(markers, markerEdit.i, markerEdit.draft);
+    if (problem) {
+      setMarkerEdit({ ...markerEdit, err: problem });
+      return;
+    }
+    const next = markers.map((m, j) => (j === markerEdit.i ? { ...m, name: markerEdit.draft.trim() } : m));
+    if (await saveMarkers(next)) setMarkerEdit(null);
+  };
+  useEffect(() => {
+    setMarkerSel(null);
+    setMarkerEdit(null);
+    setMarkerErr(null);
+  }, [selected?.id]);
+
+  // S3-I #28 — capture the current view as a 256×256 PNG and PUT it. The square crop is drawn into a 2D
+  // canvas in the same task as an explicit render, so the WebGL buffer is read before it is presented:
+  // no preserveDrawingBuffer on the live context. Non-fatal: a failed thumbnail never fails Save.
+  const captureSceneThumb = async (id: string) => {
+    const get = r3fGet.current;
+    if (!get) return;
+    setThumbErr(null);
+    try {
+      const { gl, scene, camera } = get();
+      const src = gl.domElement;
+      const { sx, sy, side } = squareCrop(src.width, src.height);
+      if (side < 1) throw new Error("viewer has no size");
+      const out = document.createElement("canvas");
+      out.width = THUMB_SIZE;
+      out.height = THUMB_SIZE;
+      const ctx = out.getContext("2d");
+      if (!ctx) throw new Error("no 2d context");
+      gl.render(scene, camera);
+      ctx.drawImage(src, sx, sy, side, side, 0, 0, THUMB_SIZE, THUMB_SIZE);
+      const blob = await new Promise<Blob | null>((res) => out.toBlob(res, "image/png"));
+      if (!blob) throw new Error("toBlob failed");
+      const known = etagRef.current?.id === id ? etagRef.current.etag : null;
+      const h: Record<string, string> = { "Content-Type": "image/png" };
+      if (known) h["If-Match"] = known;
+      const r = await fetch(`${API}/api/assets/${encodeURIComponent(id)}/preview`, { method: "PUT", headers: h, body: blob });
+      const textBody = await r.text();
+      if (!r.ok) throw new Error(`${r.status} ${textBody}`);
+      const tag = r.headers.get("ETag");
+      if (tag) etagRef.current = { id, etag: tag };
+      const j = JSON.parse(textBody) as { preview: string };
+      const patch = (a: AssetMeta) => (a.id === id ? { ...a, formats: { ...a.formats, preview: j.preview } } : a);
+      setAssets((list) => list.map(patch));
+      setSelected((cur) => (cur ? patch(cur) : cur));
+      setThumbV((m) => ({ ...m, [id]: Date.now() }));
+    } catch (err) {
+      setThumbErr(`Thumbnail not saved: ${err}`);
+    }
   };
 
   const selectClip = useCallback((name: string) => {
@@ -2121,6 +2285,7 @@ export function App() {
       setSelected((cur) =>
         cur && cur.id === updated.id ? { ...cur, ...updated } : cur,
       );
+      void captureSceneThumb(updated.id);
     } catch (err) {
       setSceneSaveError(`Save failed: ${err}`);
     } finally {
@@ -2335,6 +2500,7 @@ export function App() {
                   setGltfClips([]);
                 }}
               >
+                {a.stage === "scene" ? <SceneThumb asset={a} v={thumbV[a.id]} /> : null}
                 {selected?.id === a.id ? "★ " : ""}
                 {a.name || a.slug}
                 {(() => {
@@ -2805,6 +2971,7 @@ export function App() {
           camera={{ position: [2, 1.5, 3], fov: 50 }}
           shadows={viewDraft.shadows}
           gl={{ alpha: false }}
+          onCreated={(st) => (r3fGet.current = st.get)}
         >
           <FirstFrame k={selected && sceneAppliedFor === selected.id ? selected.id : null} onFrame={setSceneFramedFor} />
           <color attach="background" args={[canvasTheme.clear]} />
@@ -3326,6 +3493,11 @@ export function App() {
             </div>
             {cameraErr && <p className="err">{cameraErr}</p>}
             {sceneSaveError && <p className="err">{sceneSaveError}</p>}
+            {thumbErr && (
+              <p className="muted" data-testid="scene-thumb-error">
+                {thumbErr}
+              </p>
+            )}
             {rateLimitNote("scene")}
             {(() => {
               // S3-D #127 / R1 §6 — V4a ambiguity links to the conflicting assets
@@ -4144,6 +4316,83 @@ export function App() {
               {duration > 0 ? `${(scrub * duration).toFixed(2)}s` : "—"}
             </span>
           </label>
+          {canPlay && clip ? (
+            <div className="timeline-markers" data-testid="timeline-markers">
+              <div className="marker-track" aria-label={`Markers on ${clip}`}>
+                {markersForClip(markers, clip).map(({ m, i }) =>
+                  markerEdit?.i === i ? (
+                    <span key={`e-${i}`} className="marker-edit" style={{ left: `${markerPct(m.t, clipDurMs)}%` }}>
+                      <input
+                        autoFocus
+                        data-testid="timeline-marker-rename"
+                        aria-label={`Rename marker ${m.name}`}
+                        maxLength={60}
+                        value={markerEdit.draft}
+                        onChange={(e) => setMarkerEdit({ i, draft: e.target.value, err: null })}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") void commitRename();
+                          if (e.key === "Escape") setMarkerEdit(null);
+                        }}
+                        onBlur={() => setMarkerEdit(null)}
+                      />
+                      {markerEdit.err && (
+                        <small className="err" role="alert" data-testid="timeline-marker-rename-error">
+                          {markerEdit.err}
+                        </small>
+                      )}
+                    </span>
+                  ) : (
+                    <button
+                      key={`m-${i}`}
+                      type="button"
+                      className={markerSel === i ? "marker-tick active" : "marker-tick"}
+                      data-testid="timeline-marker"
+                      data-marker-name={m.name}
+                      data-marker-t={m.t}
+                      aria-pressed={markerSel === i}
+                      aria-label={`Marker ${m.name} at ${m.t} ms`}
+                      title={`${m.name} · ${m.t} ms (double-click to rename)`}
+                      style={{ left: `${markerPct(m.t, clipDurMs)}%` }}
+                      onClick={() => {
+                        setMarkerSel(i);
+                        jumpToMarker(m);
+                      }}
+                      onDoubleClick={() => setMarkerEdit({ i, draft: m.name, err: null })}
+                    />
+                  ),
+                )}
+              </div>
+              <button
+                type="button"
+                data-testid="timeline-marker-add"
+                disabled={markerSaving || !canAddMarker(markers, clipDurMs)}
+                title={clipDurMs === undefined ? "No probed duration for this clip" : "Add a marker at the playhead"}
+                onClick={() => void addMarker()}
+              >
+                + Marker
+              </button>
+              {markerSel !== null && markers[markerSel] ? (
+                <button
+                  type="button"
+                  data-testid="timeline-marker-delete"
+                  disabled={markerSaving}
+                  aria-label={`Delete marker ${markers[markerSel].name}`}
+                  onClick={() => void deleteMarker(markerSel)}
+                >
+                  Delete marker
+                </button>
+              ) : null}
+              <span className="muted" data-testid="timeline-marker-hint">
+                {markerHint(markers.length)}
+              </span>
+              {markerErr && (
+                <span className="err" role="alert" data-testid="timeline-marker-error">
+                  {markerErr}
+                </span>
+              )}
+            </div>
+          ) : null}
           <span className="meta">Format: {formatLabel}</span>
         </div>
         </div>

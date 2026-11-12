@@ -819,3 +819,72 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
 .camera-foot { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .compare-probe-diff { width: 100%; margin: 8px 0; }
 .compare-probe-diff ul { margin: 4px 0 0; padding-left: 1.2rem; }
+
+/* S3-I #28 — scene card thumbnail (32×32 in the list; fallback = initial on a neutral tile) */
+.scene-thumb {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.scene-thumb.fallback {
+  background: var(--rule);
+  color: var(--fg, inherit);
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 32px;
+  text-align: center;
+}
+
+/* S3-I #81 — timeline markers row: ticks on a track the width of the row, ≥ 24×24 hit targets */
+.timeline-markers {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 0.8rem;
+}
+.marker-track {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 140px;
+  height: 28px;
+  border-bottom: 2px solid var(--rule);
+}
+.marker-tick {
+  position: absolute;
+  top: 0;
+  width: 24px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  transform: translateX(-50%);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.marker-tick::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 4px;
+  width: 2px;
+  height: 22px;
+  background: var(--accent, #4a8cff);
+}
+.marker-tick.active::after { width: 4px; left: 10px; }
+.marker-tick:focus-visible { outline: 2px solid var(--accent, #4a8cff); }
+.marker-edit {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: inline-flex;
+  flex-direction: column;
+  z-index: 3;
+}
+.marker-edit input { width: 10rem; min-height: 24px; }
