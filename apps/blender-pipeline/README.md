@@ -23,6 +23,17 @@ MODE=rigged ./pipeline.sh in.png out-rigged.glb
 "${BLENDER_BIN:-blender}" --background --python png_to_glb.py -- in.png out.glb --mode rigged
 ```
 
+### Draco (S3-I #59, opt-in)
+
+`./pipeline.sh --draco in.png out.glb` exports with `KHR_draco_mesh_compression` (level 6; quantization
+position 14, normal 10, texcoord 12, color 10, generic 12). Off by default. The flag never falls back to an
+uncompressed file: a failed Draco export exits 4, and a Blender build without the Draco encoder exits 6
+(tests skip that case with `SKIP_PLATFORM`). `probe_glb.mjs` reports `meshCompression: "draco" | "none"`;
+clips, bones and weights read the same as the plain export. Goldens pin `rigged` and `riggedDraco` separately.
+
+The viewer decodes with the vendored decoder at `/draco/`: `apps/world-builder/client/draco-vendor.mjs` copies
+three's bundled decoder (pinned in `public/draco/manifest.json`, sha256-checked) at vite dev/build. No CDN.
+
 Version check:
 
 ```bash
