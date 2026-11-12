@@ -49,12 +49,12 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 - **Tests:** PUT then GET is byte-identical; a non-scene is 400; a non-PNG is 400; over 512 KiB is 413; the file is under `WB_DATA_ROOT`; the capture test is driven with SwiftShader.
 
 ## 8. #131: lazy-load child GLBs (E2)
-- Nodes outside the frustum (#130) or past `SCENE_NODES_MAX/4` load on first visibility through drei `useGLTF` and Suspense. The placeholder is a wireframe bounds box (`lazy-placeholder`). The stats panel (#83) adds `Loaded n / total` (`stats-loaded`). No API change.
-- **Tests:** a 256-node scene starts with fewer than 256 loaded; in-view nodes within the eager cap (`SCENE_NODES_MAX/4`) are never placeholders; in-view nodes past that cap may start as placeholders, but they still have to load without a camera move; turning a culled node into view loads it.
+- Nodes outside the frustum (#130) or past `SCENE_NODES_MAX/4` load on first visibility through drei `useGLTF` and Suspense. The placeholder is a wireframe bounds box (`lazy-placeholder`, mirrored in the DOM with `data-node-id`). The selected node (gizmo target) always loads immediately. The stats panel (#83) adds `Loaded n / total` (`stats-loaded`). No API change.
+- **Tests:** a 256-node scene starts with fewer than 256 loaded; in-view nodes within the eager cap (`SCENE_NODES_MAX/4`) are never placeholders; in-view nodes past that cap may start as placeholders, but they still have to load without a camera move; turning a culled node into view, or selecting it, loads it.
 
 ## 9. #34: scene templates (E2)
-- New Scene dialog offers "Blank", "Duo billboard", and "Rigged + prop". Picking a template opens the asset picker for each slot, built from the user's own assets. No media is bundled. Templates are JSON (in `docs/` or client code) validated by the scene schema in a test.
-- **Tests:** schema validation of both templates; creating one requires a picked asset per slot; cancelling leaves no scene.
+- New Scene dialog offers "Blank", "Duo billboard", and "Rigged + prop". Picking a template opens the asset picker for each slot, built from the user's own assets (billboard slots list only billboards, the rigged slot only rigged assets; scenes are never offered). "Blank" has one slot, since the scene schema needs at least one node. Create stays disabled until every slot is filled and POSTs one `stage:"scene"` asset (reusing its first child's `formats.glb` path); Cancel sends nothing. No media is bundled. Templates are JSON (in `docs/` or client code) validated by the scene schema in a test.
+- **Tests:** schema validation of every template; creating one requires a picked asset per slot; cancelling leaves no scene; Create makes exactly one scene with the right children.
 
 ## 10. #81: timeline markers (E2)
 - Additive `clipUx.markers:[{clip, t, name}]` on the **asset** (not on `scene.nodes` — nodes have no `clipUx`). Cap 16, unique names, name 1..40, `clip` must be in `clips[]`, `t` is an integer ms in `[0, clipDurations[clip]]`. More than 16, or any bad marker → 400 `VALIDATION {field:"clipUx.markers"}`. A clip-ux PATCH without `markers` keeps the stored markers; `markers: []` clears them.

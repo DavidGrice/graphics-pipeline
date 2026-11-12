@@ -35,12 +35,13 @@
 
 ## §6 #131 lazy child GLBs (E2)
 - Out-of-frustum (#130) or past the eager cap (`SCENE_NODES_MAX/4`) nodes load on first visibility via `useGLTF` + Suspense; placeholder is a wireframe bounds box.
-- In-view nodes within the eager cap are never placeholders. In-view nodes past that cap may start as placeholders, but they still load without a camera move. A culled node loads when it is turned into view.
+- In-view nodes within the eager cap are never placeholders. In-view nodes past that cap may start as placeholders, but they still load without a camera move. A culled node loads when it is turned into view. A selected node (the gizmo target) loads immediately, even past the cap or behind the camera; as shipped (`a372ba5`) each pending placeholder is also mirrored in the DOM as a `lazy-placeholder` item with `data-node-id`.
 - Stats panel line "Loaded n / total". Test ids: `lazy-placeholder`, `stats-loaded`. No API change.
 
 ## §7 #34 scene templates (E2)
 - New Scene dialog: "Blank", "Duo billboard", "Rigged + prop". Picking a template opens the asset picker for each slot, built from the user's own assets; no bundled media.
 - Templates are JSON (in `docs/` or client code) validated by the scene schema in a test. Test ids: `template-option`, `template-slot-pick`, `template-create`.
+- As shipped (`92b55f1`): "Blank" has one slot (the scene schema needs at least one node). Slot pickers list only matching assets (billboard slots list billboards, the rigged slot lists rigged assets, scenes are never offered). Create stays disabled until every slot is filled and POSTs one `stage:"scene"` asset, then selects it; Cancel resets and sends nothing. A new scene reuses its first child's `formats.glb` path. Extra test ids: `new-scene`, `template-cancel`, `template-name`, `template-error`.
 
 ## §8 #81 timeline markers (E2)
 - Additive `clipUx.markers:[{clip, t, name}]` on the **asset** (not on `scene.nodes` — nodes have no `clipUx`). Cap 16, unique names, name 1..40, `clip` must be in `clips[]`, `t` is an integer ms in `[0, clipDurations[clip]]`. More than 16 → 400 `VALIDATION {field:"clipUx.markers"}`.
