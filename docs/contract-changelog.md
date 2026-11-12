@@ -88,13 +88,13 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 - **Env:** `PROBE_WORKERS`, `PROBE_TIMEOUT_MS`
 - **Tests (#101):** contract fuzz over register / PATCH / featured / pack import; replay a failure with FUZZ_SEED=<n>, size with FUZZ_RUNS (test-only knobs, not server env; see `.env.example`)
 - **Routes:** `GET`/`PATCH`/`DELETE` `/api/assets/:id` and `PATCH` `/api/assets/:id/clip-ux` gain opt-in `If-Match` + strong `ETag` (OpenAPI 0.8.0); `GET /api/activity` gains optional `before=` ISO-8601 cursor (NIT-H-2); no new routes
-- **Schema:** none (`assetSchemaVersion` stays 3)
+- **Schema:** additive only, `assetSchemaVersion` stays 3: optional `clipUx.markers` (#81, max 16 `{clip, t, name}`, t integer ms, name 1-40 chars unique)
 
 
 ## S3-I
 - **Codes:** `PRECONDITION_REQUIRED`
 - **Env:** `BULK_MAX` (integer 1..100, default 20; bad value → `CONFIG_INVALID`). ECHO_ITEMS_MAX is a constant 20, not an env.
-- **Routes:** `PATCH /api/assets/:id/nodes` (#40, `{upsert, remove}`, `If-Match` required: missing → 428 `PRECONDITION_REQUIRED`, stale → 412) (OpenAPI 0.9.0); `POST /api/assets/bulk` (#70, `{zip:"inbox/<file>.zip"}` → `{results:[{name, ok, id?, slug?, code?}]}`); `PUT` preview (#28) lands later
+- **Routes:** `PATCH /api/assets/:id/nodes` (#40, `{upsert, remove}`, `If-Match` required: missing → 428 `PRECONDITION_REQUIRED`, stale → 412) (OpenAPI 0.9.0); `POST /api/assets/bulk` (#70, `{zip:"inbox/<file>.zip"}` → `{results:[{name, ok, id?, slug?, code?}]}`); `PUT /api/assets/:id/preview` (#28, raw `image/png` 256x256, at most 512 KB, scene only; 413 `PAYLOAD_TOO_LARGE` can fire before 404) → `{id, bytes, preview}`; `PATCH /api/assets/:id/clip-ux` accepts `markers` (#81)
 - **Schema:** none (`assetSchemaVersion` stays 3)
 - **Activity (#143):** every non-ops entry written from now on has `actor: "local"` (`GET /api/activity` passes it through; older lines have none and are not back-filled; ops kinds never carry it; no new kinds).
 - **Echo (CO-1):** each echoed array in a 4xx body is capped at 20 items; when any item is dropped, top-level `truncated` is the sum of dropped items (absent otherwise). The 200-character client-echo cap is unchanged (S3-H D2). Echo walks stop at depth 8: anything deeper is not echoed (a dropped array counts toward `truncated`).
