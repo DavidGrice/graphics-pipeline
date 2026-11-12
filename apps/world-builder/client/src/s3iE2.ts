@@ -83,3 +83,19 @@ export function cleanMarkers(raw: unknown): Marker[] {
     .filter((m) => m && typeof m === "object" && typeof m.clip === "string" && Number.isInteger(m.t) && typeof m.name === "string")
     .map((m) => ({ clip: m.clip, t: m.t, name: m.name }));
 }
+
+// ---------------------------------------------------------------- #131
+/** Nodes at live index < SCENE_NODES_MAX/4 load eagerly; the rest wait for first frustum visibility. */
+export function eagerCap(sceneMaxNodes: number): number {
+  return Math.max(0, Math.floor((Number.isFinite(sceneMaxNodes) ? sceneMaxNodes : 0) / 4));
+}
+
+export function isLazyIndex(index: number, sceneMaxNodes: number): boolean {
+  return index >= eagerCap(sceneMaxNodes);
+}
+
+/** Stats panel copy (D1 §6): "Loaded n / total", n clamped to [0, total]. */
+export function loadedText(loaded: number, total: number): string {
+  const t = Math.max(0, Math.floor(total));
+  return `Loaded ${Math.min(t, Math.max(0, Math.floor(loaded)))} / ${t}`;
+}

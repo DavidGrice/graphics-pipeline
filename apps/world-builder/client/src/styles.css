@@ -888,3 +888,15 @@ button.tiny:disabled { opacity: 0.5; cursor: not-allowed; }
   z-index: 3;
 }
 .marker-edit input { width: 10rem; min-height: 24px; }
+
+/* S3-I #131 — DOM mirror of lazy placeholders (state only; the box is drawn in the viewer) */
+.lazy-placeholders {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  list-style: none;
+}

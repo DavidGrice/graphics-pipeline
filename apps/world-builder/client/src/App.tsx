@@ -5,7 +5,7 @@
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, useGLTF, TransformControls } from "@react-three/drei";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent } from "react";
+import type { CSSProperties, PointerEvent, ReactNode } from "react";
 import * as THREE from "three";
 import { characterTypeBadge } from "./characterTypeBadge";
 import { ErrorBoundary, ErrorCard } from "./ErrorBoundary";
@@ -83,6 +83,7 @@ import {
   cullActive,
   cullDecisions,
   effectiveTimeScale,
+  sphereInFrustum,
   isPreconditionFailed,
   parseSpeed,
   saveHeaders,
@@ -124,6 +125,8 @@ import {
   canAddMarker,
   cleanMarkers,
   hasPngPreview,
+  isLazyIndex,
+  loadedText,
   markerHint,
   markerPct,
   markersForClip,
@@ -639,9 +642,12 @@ function SceneNodeModel({
   wireframe = false,
   bones = false,
   shadows = false,
+  onLoaded,
 }: {
   url: string;
   clipName?: string;
+  /** S3-I #131 — called once the GLB has resolved and the model has mounted. */
+  onLoaded?: () => void;
   transform?: {
     position?: [number, number, number];
     rotation?: [number, number, number];
@@ -663,6 +669,11 @@ function SceneNodeModel({
   shadows?: boolean;
 }) {
   const { scene, animations } = useGLTF(url);
+  const onLoadedRef = useRef(onLoaded);
+  onLoadedRef.current = onLoaded;
+  useEffect(() => {
+    onLoadedRef.current?.();
+  }, [url]);
   const mixer = useRef<THREE.AnimationMixer | null>(null);
   const [groupObj, setGroupObj] = useState<THREE.Group | null>(null);
   const clone = useMemo(() => scene.clone(true), [scene]);
@@ -859,6 +870,64 @@ function CullController({
     }
   });
   return null;
+}
+
+/**
+ * S3-I #131 — a node past the eager cap (SCENE_NODES_MAX/4) shows a wireframe bounds box until its
+ * first frame inside the camera frustum, then loads through useGLTF under its own Suspense (the box
+ * stays as the fallback, so loading never blanks the rest of the scene). In-view nodes load on the
+ * next frame without a camera move; a culled node loads when it is turned into view. The gizmo
+ * target (`force`) loads at once.
+ */
+function LazySceneNode({
+  transform,
+  force,
+  children,
+}: {
+  transform?: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+  };
+  force?: boolean;
+  children: ReactNode;
+}) {
+  const [load, setLoad] = useState(Boolean(force));
+  const ref = useRef<THREE.Group | null>(null);
+  const frustum = useMemo(() => new THREE.Frustum(), []);
+  const m = useMemo(() => new THREE.Matrix4(), []);
+  const c = useMemo(() => new THREE.Vector3(), []);
+  useEffect(() => {
+    if (force) setLoad(true);
+  }, [force]);
+  useFrame(({ camera }) => {
+    const g = ref.current;
+    if (load || !g) return;
+    camera.updateMatrixWorld();
+    m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(m);
+    g.updateWorldMatrix(true, false);
+    c.set(0, 0.5, 0).applyMatrix4(g.matrixWorld);
+    const s = g.getWorldScale(new THREE.Vector3());
+    const r = 0.87 * Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), 1e-3);
+    const planes = frustum.planes.map((p) => ({ nx: p.normal.x, ny: p.normal.y, nz: p.normal.z, c: p.constant }));
+    if (sphereInFrustum({ x: c.x, y: c.y, z: c.z, r }, planes)) setLoad(true);
+  });
+  const box = (
+    <group
+      ref={ref}
+      position={transform?.position ?? [0, 0, 0]}
+      rotation={transform?.rotation ?? [0, 0, 0]}
+      scale={transform?.scale ?? [1, 1, 1]}
+      userData={{ gpNode: true, gpLazy: true, gpKeep: force === true }}
+    >
+      <mesh name="lazy-placeholder" position={[0, 0.5, 0]}>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshBasicMaterial color="#7a8699" wireframe />
+      </mesh>
+    </group>
+  );
+  return load ? <Suspense fallback={box}>{children}</Suspense> : box;
 }
 
 function SceneNodeMissing({
@@ -1162,6 +1231,14 @@ export function App() {
   }, []);
   // S3-H #130 — drawn / total scene nodes (cull stats)
   const [cullStats, setCullStats] = useState<{ drawn: number; total: number }>({ drawn: 0, total: 0 });
+  // S3-I #131 — scene node ids whose GLB has resolved and mounted (reset when the selection changes)
+  const [loadedIds, setLoadedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const markLoaded = useCallback((id: string) => {
+    setLoadedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
+  useEffect(() => {
+    setLoadedIds(new Set());
+  }, [selected?.id]);
   // S3-H #69 — strong ETag from the last load/save of the selected asset; 412 prompt
   const etagRef = useRef<{ id: string; etag: string } | null>(null);
   const [etagPrompt, setEtagPrompt] = useState(false);
@@ -2301,6 +2378,18 @@ export function App() {
     },
     [assets],
   );
+  // S3-I #131 — loadable (has a GLB that passed preflight, not hidden) nodes; past the eager cap they are lazy
+  const lazyRows = isScene
+    ? sceneNodes.map((n, i) => {
+        const child = resolveChild(n.assetId);
+        const u = child?.formats?.glb ? `${API}/api/assets/${child.id}/file` : null;
+        const loadable = Boolean(u && preflight[u]?.ok) && (n as SceneNodeDraft).visible !== false;
+        return { id: n.id, loadable, lazy: isLazyIndex(i, sceneMaxNodes) };
+      })
+    : [];
+  const loadTotal = lazyRows.filter((r) => r.loadable).length;
+  const loadedCount = lazyRows.filter((r) => r.loadable && loadedIds.has(r.id)).length;
+  const placeholderIds = lazyRows.filter((r) => r.loadable && r.lazy && !loadedIds.has(r.id)).map((r) => r.id);
 
   const canPlay = clipsForUi.length > 0 && !isScene;
   const glbUrl =
@@ -2882,6 +2971,12 @@ export function App() {
                 </strong>
               </div>
             )}
+            {isScene && (
+              <div className="import-meta-row">
+                <span className="muted">GLBs</span>
+                <strong data-testid="stats-loaded">{loadedText(loadedCount, loadTotal)}</strong>
+              </div>
+            )}
           </div>
         )}
         <ErrorBoundary
@@ -2965,6 +3060,14 @@ export function App() {
             <span className="select-box-count">{viewerShellRef.current ? boxIds(selBox, viewerShellRef.current.querySelector(".viewer-canvas") as HTMLElement).length : 0}</span>
           </div>
         ) : null}
+        {/* S3-I #131 — DOM mirror of the wireframe placeholders still waiting to load (one per node). */}
+        {isScene && placeholderIds.length > 0 ? (
+          <ul className="lazy-placeholders" aria-hidden="true">
+            {placeholderIds.map((id) => (
+              <li key={id} data-testid="lazy-placeholder" data-node-id={id} />
+            ))}
+          </ul>
+        ) : null}
         {/* S3-D #86 — opaque drawing buffer: translucent GLB pixels must not show the page
             background through (visible once the clear colour differs from the chrome bg). */}
         <Canvas
@@ -3012,7 +3115,7 @@ export function App() {
           {isScene && multiCentroid ? <MultiGizmo at={multiCentroid} onCommit={moveSelection} snapStep={snapEnabled ? snapStep : null} /> : null}
           <Suspense fallback={null}>
             {isScene
-              ? sceneNodes.map((n) => {
+              ? sceneNodes.map((n, nodeIndex) => {
                   const child = resolveChild(n.assetId);
                   const childUrl = child
                     ? `${API}/api/assets/${child.id}/file`
@@ -3033,14 +3136,16 @@ export function App() {
                       />
                     );
                   }
-                  return (
+                  const nodeSelected = multiLive.length < 2 && sceneNodeId === n.id;
+                  const model = (
                     <SceneNodeModel
                       key={n.id}
                       url={childUrl!}
+                      onLoaded={() => markLoaded(n.id)}
                       clipName={reducedMotion ? undefined : clipForNode}
                       transform={n.transform}
                       highlighted={sceneNodeId === n.id || multiSel.includes(n.id)}
-                      selected={multiLive.length < 2 && sceneNodeId === n.id}
+                      selected={nodeSelected}
                       visible={(n as SceneNodeDraft).visible !== false}
                       gizmoMode={gizmoMode}
                       snapEnabled={snapEnabled}
@@ -3066,6 +3171,12 @@ export function App() {
                         );
                       }}
                     />
+                  );
+                  if (!isLazyIndex(nodeIndex, sceneMaxNodes) || (n as SceneNodeDraft).visible === false) return model;
+                  return (
+                    <LazySceneNode key={n.id} transform={n.transform} force={nodeSelected}>
+                      {model}
+                    </LazySceneNode>
                   );
                 })
               : glbUrl && !loadError && singlePreflight?.ok ? (
