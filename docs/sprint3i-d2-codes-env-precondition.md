@@ -17,6 +17,7 @@
 | `SCENE_ROOT_DELETE`, `SCENE_NO_LIVE_NODES` | reuse | #40 tombstone of the root, or no live nodes left. |
 | `SCENE_RESOLVE` | reuse (400) | #40 result fails `validateSceneChildren` (same as the full PATCH). |
 | `CONFIG_INVALID` | reuse | Bad `BULK_MAX` at boot only. `ECHO_ITEMS_MAX` is a constant, not env. |
+| `DRACO_CHECKSUM` | **new** (build-time, not HTTP) | #59 `draco-vendor.mjs` (vite dev/build): a decoder file's sha256 doesn't match `public/draco/manifest.json`, or the installed three isn't the pinned 0.187.0. Fails the dev start or build; never an API response. Listed in `docs/error-codes.md` and the S3-I section of `docs/contract-changelog.md`. |
 
 Still exactly 6 `SKIP_*`. Schema stays **3**. OpenAPI → **0.9.0** (new routes: `PATCH /api/assets/:id/nodes`, `POST /api/assets/bulk`, `PUT /api/assets/:id/preview`; GET preview already exists). There is no `/api/scenes` collection.
 
@@ -30,7 +31,7 @@ Still exactly 6 `SKIP_*`. Schema stays **3**. OpenAPI → **0.9.0** (new routes:
 ## Behaviour notes
 - **Echo cap (ruling a):** each echoed array ≤20 items, top-level `truncated:<n>` when any dropped (sum across arrays). The 200-character client-echo cap ends in `…` and is a prefix of the sent value (CO-3 (ii)). Mid-string zod excerpts stay under CO-3 (iii): they need not end in `…` or be a prefix (NIT-H-5). Never server or absolute paths.
 - **#40 (ruling b):** 404 → 428 missing `If-Match` → 400 malformed → 412 stale → 400 body / scene codes → 200 + `ETag`. Required on this route only; existing PATCH/DELETE and clip-ux stay opt-in. `remove` tombstones; purge stays on the full asset PATCH.
-- **#59 (ruling c):** vendored decoder under `client/public/draco/`, pinned version + checksum in a test; no CDN. Two #62 golden hashes (plain and Draco). No seventh `SKIP_*`.
+- **#59 (ruling c, as accepted at `3564980`):** self-hosted decoder at `/draco/` (`client/public/draco/`). `manifest.json` (committed) pins three 0.187.0 and a sha256 per file; `draco-vendor.mjs` copies three's own decoder at vite dev and build and fails on a checksum or three-version mismatch. The wasm is not committed (gitignored). No CDN. Two #62 golden hashes (`rigged`, `riggedDraco`). No seventh `SKIP_*` (a missing encoder skips with the existing `SKIP_PLATFORM`). `pipeline.sh --draco` exit codes: a failed Draco export reuses exit **4** (the existing export-failure code, no uncompressed fallback); a Blender without the Draco encoder is the new exit **6** (`EXIT_NO_DRACO`).
 - **#143:** `actor: "local"` on existing non-ops kinds only (`asset.register`, `asset.patch`, `asset.delete`, `scene.save`, `scene.purge`, `pack.import`). No `asset.purge` or `scene.delete` kinds. No key id until #73.
 - **#70:** JSON `{zip:"inbox/<file>.zip"}`, not multipart. Whole-request zip-slip is `PATH_OUTSIDE_INBOX`; whole-request oversize is `GLB_TOO_LARGE`. Per-entry `SLUG_CLASH` / `GLB_TOO_LARGE` leave the other rows intact.
 - **CO-2:** results are cited as `HEAD=<sha>` + run id, only after that run finished.

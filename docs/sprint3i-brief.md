@@ -2,7 +2,7 @@
 
 **Status:** R1. Local at `/workspace/sprint3i-brief.md` until committed on `enhancement/s3i-growth-t9` after the written merge-tip PASS.
 **Base:** `origin/dev` @ `1cfe7b366d3998927b9c56fa32939460af528b95` (S3-H PR #53 merge, includes #49 and `0f5a1c6`), not pack tip `0f5a1c6`. **Seed:** `/workspace/sprint3i-seed.md`. **Pack:** `enhancement/s3i-growth-t9` (cut from this merge commit after the written merge-tip PASS).
-**Leader rulings:** (a) cap each echoed array at 20 items and add top-level `truncated:<n>` · (b) missing `If-Match` on #40 → 428 `PRECONDITION_REQUIRED`; a stale ETag stays 412 · (c) vendor the Draco decoder, pinned and checksummed, with no CDN.
+**Leader rulings:** (a) cap each echoed array at 20 items and add top-level `truncated:<n>` · (b) missing `If-Match` on #40 → 428 `PRECONDITION_REQUIRED`; a stale ETag stays 412 · (c) vendor the Draco decoder, pinned and checksummed, with no CDN (amended for #59: the wasm is copied from three 0.187.0 at build time and checksummed against a committed manifest, not committed itself).
 
 ## 1. Global locks (unchanged)
 - Probe wins. No media in git. `BLENDER_BIN` fails closed. `assetSchemaVersion` stays **3** (additive, optional only).
@@ -74,9 +74,9 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 - **Tests:** those four cases are in the suite and fail if the cap or the exemptions regress.
 
 ## 13. #59: Draco compress flag (E3)
-- `png_to_glb --draco`, **off by default**. The viewer decodes with a vendored, version-pinned, checksummed decoder under `client/public/draco/` (wasm is code, not media). No gstatic CDN. Do not call `DRACOLoader.setDecoderConfig()` (deprecated in three r185+). A test checks the checksum.
-- The probe reads compressed GLBs. #62 golden hashes cover **both** modes (two hashes, not one). Blender smoke without the encoder skips with an existing `SKIP_*` (no seventh skip code).
-- **Tests:** `--draco` output is a smaller GLB the probe and viewer accept; the checksum test fails on a swapped binary; a build or test must not fetch a CDN decoder.
+- `pipeline.sh --draco` (the `png_to_glb` step), **off by default**. A failed Draco export exits 4 and never falls back to an uncompressed GLB; no Draco encoder in Blender exits 6. The viewer decodes with a version-pinned, checksummed decoder served from `client/public/draco/` (`DRACO_PATH` `/draco/` on every `useGLTF`). The committed `public/draco/manifest.json` pins three 0.187.0 and a sha256 per decoder file; `draco-vendor.mjs` (a vite plugin, dev and build) copies three's own decoder into `public/draco/`, verifies the checksums, and fails with build-time code `DRACO_CHECKSUM` (listed in `docs/error-codes.md`) on a mismatch or a different three version. The decoder files are not committed (gitignored): the wasm comes from three 0.187.0 at dev and build time, and the vendor step also runs in CI on a fresh clone (Leader, amending (c)). No gstatic CDN. Do not call `DRACOLoader.setDecoderConfig()` (deprecated in three r185+).
+- The probe reads compressed GLBs and reports `meshCompression`; clips, bones and weights match the plain export. #62 golden hashes cover **both** modes (`rigged` and `riggedDraco`, two hashes). Blender smoke without the encoder skips with `SKIP_PLATFORM` (no seventh skip code).
+- **Tests:** `--draco` output is a smaller GLB the probe and viewer accept; the checksum test fails on a swapped binary; no CDN URL in our source; the browser test fails on any request to an outside Draco host; the vite plugin rewrites drei's unused default `gstatic.com/draco/versioned/decoders/<v>/` URL to `/draco/` at `renderChunk`, so the bundle holds no CDN URL; the bundle scan builds `dist` (or fails, never skips) and fails on any CDN hit (`gstatic`, `unpkg`, `jsdelivr`, same pattern as the source scan), with no allowlist.
 
 ## 14. #105: perf budget CI (E3)
 - One `perf-budgets.json` (fixture GLB bytes, 256-node frame time in ms) with a doc line in `docs/`. A Node **24** CI job fails when a budget is exceeded and prints the budget, the actual, and the `HEAD=` line from §11.

@@ -61,14 +61,17 @@
 
 ## §11 #59 Draco (E3)
 - `png_to_glb --draco`, off by default. Viewer uses the **vendored, pinned, checksummed** decoder in `client/public/draco/` (wasm is code, not media); no CDN. Don't call `DRACOLoader.setDecoderConfig()` (deprecated r185+). A test checks the checksum; a build or test must not fetch a CDN decoder.
+- As shipped (`0e6ad0d`, `c10280f`, `daff5ec`): the flag is `pipeline.sh --draco` (off by default). A failed Draco export exits 4 and never falls back to an uncompressed GLB; a Blender with no Draco encoder exits 6, and tests skip that case with the existing `SKIP_PLATFORM` (still 6 `SKIP_*`). The probe reports `meshCompression`; clips, bones and weights match the plain export. Goldens pin `rigged` and `riggedDraco` separately. Decoder: `client/public/draco/manifest.json` pins three 0.187.0 and a sha256 per decoder file; `draco-vendor.mjs` (a vite plugin, dev and build) copies three's own decoder into `public/draco/`, verifies the checksums, and fails on a mismatch or a different three version. The wasm comes from three 0.187.0 at dev and build time and is not committed (gitignored); ruling (c) accepts this. Every `useGLTF` gets `DRACO_PATH` (`/draco/`); no CDN, no `setDecoderConfig`.
+- No-CDN check (Leader ruling, 2026-11-12): our own source must contain no CDN decoder URL; the browser test fails on any request to an outside Draco host; the vite plugin rewrites drei's default `gstatic.com/draco/versioned/decoders/1.5.5/` to `/draco/` at `renderChunk` (`stripCdnDecoder`, as shipped in `134a1b2`), so the bundle scan allows **no** `gstatic.com` hits (no allowlist); the scan builds `dist` or fails, never skips when `dist` is missing.
 - Probe reads compressed GLBs. #62 golden hashes cover **both** modes (two hashes, not one). Blender smoke without the encoder skips with an existing `SKIP_*` (no seventh skip code).
 
 ## §12 #105 perf budget CI (E3)
 - One `perf-budgets.json` (fixture GLB bytes, 256-node frame ms) with a doc line in `docs/`. Node 24 job only; failure prints budget, actual and the `HEAD=` line from §9.
+- As shipped (`8e1ab29`, `0bf8612`): `perf-budgets.json` (version 1) pins `fixtureGlbBytes` (`rigged-synth` 4096) and `frame256Ms` (budget **250 ms**, `swiftshader`, 120 frames after 30 warmup). Calibrated on `134a1b2` with all 256 nodes in view: medians 83.3, 66.7 and 83.3 ms, so the budget is about 3× for runner headroom. Checked by `scripts/perf-budget.mjs` in the Node 24 `perf-budgets` CI job; a timeout prints the loaded count it stalled at. Doc: `docs/perf-budgets.md`.
 - The 256-node frame budget is a **SwiftShader** number on the Linux runner and box, not a native GPU budget, so it does not flake the way the broad WebGL filter did in 3-H.
 
 ## Rulings applied
-(a) 20 items + `truncated` · (b) missing If-Match → 428, stale → 412 · (c) Draco vendored, pinned, checksummed.
+(a) 20 items + `truncated` · (b) missing If-Match → 428, stale → 412 · (c) Draco self-hosted at `/draco/`, pinned and checksummed via the committed manifest; wasm copied from three 0.187.0 at dev/build, not committed.
 
 ## Tip order
 Tip1 = CO-1 + CO-2 + CO-3 (own AC). #40 server before client use. #130 cull is the base for #131.
