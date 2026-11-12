@@ -112,6 +112,7 @@ jobs:
           UI_URL: http://localhost:5174/
           WORLD_API: http://127.0.0.1:8788
           CHROME_BIN: /usr/bin/google-chrome
+          WB_DATA_ROOT: ${{ runner.temp }}/wb-data
         run: npm run test:ui:repeat -- 2
 
 

@@ -52,6 +52,13 @@ test("#131 browser: past the eager cap, in-view nodes load and behind-camera nod
     fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, "model.glb"), makeRiggedGlb());
   }
+  // fail loudly when the API reads a different data root than we wrote to (CI 177: "Loaded 0 / 0")
+  const fr = await fetch(`${API}/api/assets/${c}/file?format=glb`);
+  if (!fr.ok) {
+    await del(API, c);
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+    assert.fail(`fixture GLB not served: GET /api/assets/${c}/file ${fr.status}; wrote to ${dirs.join(", ")} (set WB_DATA_ROOT to the API's data root)`);
+  }
   // index 0..63 eager (behind the camera), 64..65 lazy in view at the origin, 66..71 lazy behind
   const nodes = [
     ...Array.from({ length: 64 }, (_, i) => ({ id: `e${i}`, assetId: c, transform: behind(i) })),

@@ -179,7 +179,8 @@ export async function startApi(env = {}) {
   child.stderr.on("data", (d) => (log += d));
   const url = `http://127.0.0.1:${port}`;
   // 30s: cold starts under a loaded gate box have taken >15s
-  const deadline = Date.now() + 30000;
+  // monotonic: a VM freeze can jump Date.now() past the deadline without 30s of real waiting
+  const deadline = performance.now() + 30000;
   for (;;) {
     if (child.exitCode != null) throw new Error(`API exited ${child.exitCode}: ${log}`);
     try {
@@ -188,7 +189,7 @@ export async function startApi(env = {}) {
     } catch {
       /* not up yet */
     }
-    if (Date.now() > deadline) {
+    if (performance.now() > deadline) {
       child.kill();
       throw new Error(`API did not start in 30s (port ${port}): ${log || "no output"}`);
     }
