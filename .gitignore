@@ -99,3 +99,7 @@ testdata/**
 !testdata/golden/
 !testdata/golden/**
 testdata/golden/**/*.glb
+
+# S3-I #59 — Draco decoder is copied from the pinned three package at dev/build (manifest.json is committed)
+apps/world-builder/client/public/draco/*
+!apps/world-builder/client/public/draco/manifest.json
