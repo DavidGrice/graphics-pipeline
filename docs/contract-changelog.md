@@ -92,7 +92,7 @@ Line format (the doc test parses these): `- **Codes:** …`, `- **Env:** …`, `
 
 
 ## S3-I
-- **Codes:** `DRACO_CHECKSUM` (#59, vite plugin / `node draco-vendor.mjs`: decoder sha256 or three version differs from `public/draco/manifest.json`), `PRECONDITION_REQUIRED`
+- **Codes:** `DRACO_CHECKSUM` (#59, build-time only: the decoder sha256 or three version differs from the committed manifest), `PRECONDITION_REQUIRED` (#40)
 - **Env:** `BULK_MAX` (integer 1..100, default 20; bad value → `CONFIG_INVALID`). ECHO_ITEMS_MAX is a constant 20, not an env.
 - **Routes:** `PATCH /api/assets/:id/nodes` (#40, `{upsert, remove}`, `If-Match` required: missing → 428 `PRECONDITION_REQUIRED`, stale → 412) (OpenAPI 0.9.0); `POST /api/assets/bulk` (#70, `{zip:"inbox/<file>.zip"}` → `{results:[{name, ok, id?, slug?, code?}]}`); `PUT /api/assets/:id/preview` (#28, raw `image/png` 256x256, at most 512 KB, scene only; 413 `PAYLOAD_TOO_LARGE` can fire before 404) → `{id, bytes, preview}`; `PATCH /api/assets/:id/clip-ux` accepts `markers` (#81)
 - **Schema:** none (`assetSchemaVersion` stays 3)
