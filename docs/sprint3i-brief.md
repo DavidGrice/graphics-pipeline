@@ -79,7 +79,7 @@ E1 = CO-1 / 40 / 143 / 70 · E2 = 28 / 131 / 34 / 81 · E3 = CO-2 / CO-3 / 59 / 
 - **Tests:** `--draco` output is a smaller GLB the probe and viewer accept; the checksum test fails on a swapped binary; no CDN URL in our source; the browser test fails on any request to an outside Draco host; the vite plugin rewrites drei's unused default `gstatic.com/draco/versioned/decoders/<v>/` URL to `/draco/` at `renderChunk`, so the bundle holds no CDN URL; the bundle scan builds `dist` (or fails, never skips) and fails on any CDN hit (`gstatic`, `unpkg`, `jsdelivr`, same pattern as the source scan), with no allowlist.
 
 ## 14. #105: perf budget CI (E3)
-- One `perf-budgets.json` (fixture GLB bytes, 256-node frame time in ms) with a doc line in `docs/`. A Node **24** CI job fails when a budget is exceeded and prints the budget, the actual, and the `HEAD=` line from §11.
+- One `perf-budgets.json` (fixture GLB bytes, 256-node frame time in ms) at the repo root, documented in `docs/perf-budgets.md`; shipped values: `fixtureGlbBytes.rigged-synth` 4096 and `frame256Ms.budget` 250 ms (median over 120 frames after 30 warm-up, all 256 nodes in view; calibrated at medians 83.3/66.7/83.3 ms, about 3× headroom). `scripts/perf-budget.mjs` in the Node **24** `perf-budgets` CI job fails when a budget is exceeded and prints the budget, the actual, and the `HEAD=` line from §11. A frame-run timeout prints the loaded count it stalled at.
 - The 256-node frame budget is a **SwiftShader** number on the Linux runner and box, not a native GPU budget, so it does not flake the way the broad WebGL filter did in 3-H.
 - **Tests:** a planted over-budget fixture fails the job; the documented SwiftShader budgets pass on the runner.
 
