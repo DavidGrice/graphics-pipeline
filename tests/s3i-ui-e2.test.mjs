@@ -167,8 +167,21 @@ test("#81 browser: add, reload, click jumps, double-click renames, delete, cap 1
     await ren.press("Enter");
     assert.equal(await text(p.getByTestId("timeline-marker-rename-error")), "Name already used");
     await ren.fill("Hit");
+    // bind the wait to the rename's own PATCH so a slow or failed save says why instead of timing out blind
+    const renamed = p.waitForResponse((r) => r.request().method() === "PATCH" && r.url().includes(`/api/assets/${id}/clip-ux`), { timeout: 20000 });
     await ren.press("Enter");
-    await p.locator('[data-testid="timeline-marker"][data-marker-name="Hit"]').waitFor({ timeout: 10000 });
+    const rr = await renamed;
+    assert.equal(rr.status(), 200, `rename PATCH ${rr.status()}: ${await rr.text()}`);
+    try {
+      await p.locator('[data-testid="timeline-marker"][data-marker-name="Hit"]').waitFor({ timeout: 10000 });
+    } catch (e) {
+      const seen = await p.evaluate(() => ({
+        names: [...document.querySelectorAll('[data-testid="timeline-marker"]')].map((el) => el.getAttribute("data-marker-name")),
+        editing: document.querySelector('[data-testid="timeline-marker-rename"]')?.value ?? null,
+        err: document.querySelector('[data-testid="timeline-marker-error"]')?.textContent ?? null,
+      }));
+      assert.fail(`"Hit" not shown after a 200 PATCH: ${JSON.stringify(seen)} (${e.message.split("\n")[0]})`);
+    }
     const saved = (await (await fetch(`${API}/api/assets/${id}`)).json()).clipUx.markers.map((m) => m.name);
     assert.deepEqual(saved.sort(), ["Hit", "Marker 1", "Marker 2"]);
 

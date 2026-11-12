@@ -178,7 +178,8 @@ export async function startApi(env = {}) {
   child.stdout.on("data", (d) => (log += d));
   child.stderr.on("data", (d) => (log += d));
   const url = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 15000;
+  // 30s: cold starts under a loaded gate box have taken >15s
+  const deadline = Date.now() + 30000;
   for (;;) {
     if (child.exitCode != null) throw new Error(`API exited ${child.exitCode}: ${log}`);
     try {
@@ -189,7 +190,7 @@ export async function startApi(env = {}) {
     }
     if (Date.now() > deadline) {
       child.kill();
-      throw new Error(`API did not start: ${log}`);
+      throw new Error(`API did not start in 30s (port ${port}): ${log || "no output"}`);
     }
     await new Promise((r) => setTimeout(r, 100));
   }

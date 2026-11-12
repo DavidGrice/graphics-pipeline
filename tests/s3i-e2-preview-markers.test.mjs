@@ -10,7 +10,14 @@ import { startApi, billboardBody, makePng, runId } from "./helpers/s3d-synth.mjs
 
 const json = { "Content-Type": "application/json" };
 const apis = [];
+// One API per file: every test uses runId-scoped assets, and seven cold Node starts on a busy box
+// were what tripped "API did not start" (#81 cap test), not the marker code.
+let shared = null;
 async function api(env = {}) {
+  if (!Object.keys(env).length) {
+    shared ??= startApi().then((a) => (apis.push(a), a));
+    return shared;
+  }
   const a = await startApi(env);
   apis.push(a);
   return a;
