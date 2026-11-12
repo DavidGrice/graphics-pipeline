@@ -299,10 +299,13 @@ paths:
         `{zip:"inbox/<file>.zip"}` (JSON, not multipart). At most BULK_MAX (env, 1..100, default 20)
         `.glb` entries; other entries are ignored. Whole-request failures write nothing: 400 VALIDATION
         {field:"zip"|"entries"}, 400 PATH_OUTSIDE_INBOX (path outside inbox/, or a zip-slip / absolute
-        entry name), 413 GLB_TOO_LARGE (zip larger than BULK_MAX * MAX_GLB_MB). 200 body
+        entry name), 413 GLB_TOO_LARGE (zip larger than BULK_MAX * MAX_GLB_MB; body adds {sizeBytes, maxBytes}). 200 body
         `{results:[{name, ok, id?, slug?, code?}]}` in zip order; a per-entry failure (SLUG_CLASH,
         GLB_TOO_LARGE, GLB_CORRUPT, MULTI_ARMATURE, VALIDATION, INTERNAL) leaves the other rows intact.
         Slug is the entry basename without .glb in kebab-case; id is a new UUID; each success records asset.register.
+        Created assets: armature + weights + idle/walk/run → stage "rigged", characterType "prop"; otherwise
+        stage "mvp-billboard", characterType "billboard" (an armature without those clips is a VALIDATION row).
+        All get tags ["bulk"] and license "MIT"; each success also fires the asset.register webhook.
       requestBody:
         content:
           application/json:

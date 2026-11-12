@@ -7,10 +7,11 @@
 |---|---|---|
 | `PRECONDITION_REQUIRED` | **new** (428) | #40 `PATCH /api/assets/:id/nodes` without `If-Match`. Body `{code, error}`; nothing written. Listed in `docs/error-codes.md` and the S3-I section of `docs/contract-changelog.md`. |
 | `PRECONDITION_FAILED` | reuse (412) | Stale `If-Match` on #40 → `{current}`. Nothing written. |
-| `VALIDATION` | reuse | Malformed `If-Match`; empty upsert/remove or duplicate upsert id (`field:"upsert"`); bad item (`upsert[i].id`, `remove[i]`); not-a-scene (`field:"stage"`); upsert/remove overlap (`field:"remove"`, echoes `ids:[…]`); >`BULK_MAX` or zero GLB entries (`field:"entries"`); #28 non-PNG or wrong size (`field:"body"`); #81 marker cap/name/clip/`t` (`field:"clipUx.markers"`). |
+| `VALIDATION` | reuse | Malformed `If-Match`; empty upsert/remove or duplicate upsert id (`field:"upsert"`); bad item (`upsert[i].id`, `remove[i]`); not-a-scene (`field:"stage"`); upsert/remove overlap (`field:"remove"`, echoes `ids:[…]`); >`BULK_MAX` or zero GLB entries (`field:"entries"`); #70 `zip` missing, non-`.zip`, not found or unreadable (`field:"zip"`), and per entry (empty slug or schema failure, in `results[]`); #28 non-PNG or wrong size (`field:"body"`); #81 marker cap/name/clip/`t` (`field:"clipUx.markers"`). |
 | `NOT_FOUND` | reuse | 404 before 428/412 on #40. |
 | `PATH_OUTSIDE_INBOX` | reuse (400) | #70 zip-slip, absolute names, or extract-root escape; whole request, nothing written. |
 | `GLB_TOO_LARGE` | reuse (413) | #70 zip larger than `BULK_MAX * MAX_GLB_BYTES` (whole request); also a per-entry failure in `results[]`. |
+| `GLB_CORRUPT`, `MULTI_ARMATURE`, `INTERNAL` | reuse | #70 per-entry failures in `results[]` only (unreadable or encrypted entry, more than one armature, unexpected error). |
 | `SLUG_CLASH` | reuse | #70 per-entry failure only. |
 | `SCENE_ROOT_DELETE`, `SCENE_NO_LIVE_NODES` | reuse | #40 tombstone of the root, or no live nodes left. |
 | `SCENE_RESOLVE` | reuse (400) | #40 result fails `validateSceneChildren` (same as the full PATCH). |
